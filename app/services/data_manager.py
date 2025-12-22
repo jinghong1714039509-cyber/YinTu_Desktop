@@ -1,36 +1,70 @@
-from app.models.schema import Project, MediaItem, Annotation, db
+import os
+from pathlib import Path
+from app.models.schema import Project, MediaItem, db
+from app.common.config import SUPPORTED_IMAGE_EXT, SUPPORTED_VIDEO_EXT
 
 class DataManager:
     @staticmethod
-    def create_project(name, path, desc=""):
-        return Project.create(name=name, path=path, description=desc)
+    def import_folder(folder_path):
+        """扫描文件夹，入库，返回 (项目对象, 视频列表)"""
+        folder_path = str(Path(folder_path).resolve())
+        folder_name = os.path.basename(folder_path)
 
-    @staticmethod
-    def get_all_projects():
-        return list(Project.select().order_by(Project.created_at.desc()))
-
-    @staticmethod
-    def add_media_item(project_id, file_path, m_type='image', source=None, w=0, h=0):
-        return MediaItem.create(
-            project=project_id,
-            file_path=file_path,
-            media_type=m_type,
-            source_video=source,
-            width=w,
-            height=h
+        # 1. 创建或获取项目
+        project, created = Project.get_or_create(
+            path=folder_path,
+            defaults={'name': folder_name}
         )
 
-    @staticmethod
-    def get_project_media(project_id):
-        return list(MediaItem.select().where(MediaItem.project == project_id))
+        video_files = []
+        new_media_count = 0
+
+        # 2. 遍历文件
+        with db.atomic(): # 开启事务，加速写入
+            for root, dirs, files in os.walk(folder_path):
+                # 忽略隐藏目录
+                if any(part.startswith('.') for part in Path(root).parts):
+                    continue
+
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    full_path = os.path.join(root, file)
+
+                    # 如果是图片
+                    if ext in SUPPORTED_IMAGE_EXT:
+                        MediaItem.get_or_create(
+                            project=project,
+                            file_path=full_path,
+                            defaults={'media_type': 'image'}
+                        )
+                        new_media_count += 1
+                    
+                    # 如果是视频
+                    elif ext in SUPPORTED_VIDEO_EXT:
+                        MediaItem.get_or_create(
+                            project=project,
+                            file_path=full_path,
+                            defaults={'media_type': 'video'}
+                        )
+                        video_files.append(full_path)
+
+        return project, video_files, new_media_count
 
     @staticmethod
-    def save_annotation(media_id, label, x, y, w, h, conf=1.0):
-        return Annotation.create(
-            media=media_id, label_class=label,
-            x_center=x, y_center=y, width=w, height=h, confidence=conf
-        )
+    def add_frames(project_id, frame_dir, source_video_path):
+        """把抽帧生成的图片入库"""
+        project = Project.get_by_id(project_id)
+        frames = []
+        for file in os.listdir(frame_dir):
+            if file.lower().endswith('.jpg'):
+                frames.append({
+                    'project': project,
+                    'file_path': os.path.join(frame_dir, file),
+                    'media_type': 'frame',
+                    'source_video': source_video_path
+                })
         
-    @staticmethod
-    def clear_annotations(media_id):
-        Annotation.delete().where(Annotation.media == media_id).execute()
+        if frames:
+            with db.atomic():
+                MediaItem.insert_many(frames).execute()
+        return len(frames)
