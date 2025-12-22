@@ -1,15 +1,15 @@
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication
+from app.ui.main_window import MainWindow
+from app.models.schema import init_db
 
-def main():
+if __name__ == '__main__':
+    # 1. 初始化数据库
+    init_db()
+
+    # 2. 启动应用
     app = QApplication(sys.argv)
-
-    w = QMainWindow()
-    w.setWindowTitle("YinTu Desktop - Stage 1 (PySide6 OK)")
-    w.resize(900, 600)
+    w = MainWindow()
     w.show()
-
+    
     sys.exit(app.exec())
-
-if __name__ == "__main__":
-    main()
