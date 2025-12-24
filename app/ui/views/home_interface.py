@@ -1,75 +1,66 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QSpacerItem, QSizePolicy
+from __future__ import annotations
+
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
-from app.ui.components.card import CardWidget
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QFileDialog
+
+from qfluentwidgets import (
+    SubtitleLabel, BodyLabel, PrimaryPushButton, CardWidget, IconWidget,
+    FluentIcon as FIF
+)
+
 
 class HomeInterface(QWidget):
-    project_selected = Signal(str)
+    """项目管理页：选择项目目录。"""
+
+    project_selected = Signal(str)  # 信号：项目路径
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.vBoxLayout = QVBoxLayout(self)
         self.initUI()
 
     def initUI(self):
-        # 整体背景色设置为淡灰色 (AdminLTE 风格背景)
-        self.setStyleSheet("background-color: #f4f6f9;")
-        
-        # 主布局
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(30, 30, 30, 30)
-        main_layout.setSpacing(20)
+        self.vBoxLayout.setSpacing(18)
+        self.vBoxLayout.setContentsMargins(40, 40, 40, 40)
+        self.vBoxLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # --- 顶部欢迎语 ---
-        welcome_label = QLabel("仪表盘 / Dashboard")
-        welcome_label.setStyleSheet("font-size: 24px; color: #333; font-weight: bold; margin-bottom: 10px;")
-        main_layout.addWidget(welcome_label)
+        # 标题与描述（卡片式）
+        self.heroCard = CardWidget(self)
+        heroLayout = QVBoxLayout(self.heroCard)
+        heroLayout.setSpacing(10)
+        heroLayout.setContentsMargins(26, 22, 26, 22)
 
-        # --- 卡片区域布局 (水平排列) ---
-        cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(20)
+        titleRow = QWidget(self.heroCard)
+        titleRowLayout = QVBoxLayout(titleRow)
+        titleRowLayout.setContentsMargins(0, 0, 0, 0)
+        titleRowLayout.setSpacing(8)
 
-        # === 卡片 1: 快速开始 ===
-        card_start = CardWidget("🚀 快速开始", top_color="#007bff") # 蓝色顶条
-        
-        start_desc = QLabel("导入包含视频或图片的文件夹以开始新的标注任务。")
-        start_desc.setWordWrap(True)
-        start_desc.setStyleSheet("color: #666; font-size: 14px; margin-bottom: 15px; border: none;")
-        
-        self.import_btn = QPushButton("📂 打开/创建项目文件夹")
-        self.import_btn.setCursor(Qt.PointingHandCursor)
-        self.import_btn.setFixedHeight(40)
-        # 扁平化按钮样式
-        self.import_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: #0069d9; }
-            QPushButton:pressed { background-color: #0062cc; }
-        """)
-        self.import_btn.clicked.connect(self.open_folder)
+        self.icon = IconWidget(FIF.FOLDER, self.heroCard)
+        self.icon.setFixedSize(48, 48)
 
-        card_start.add_widget(start_desc)
-        card_start.add_widget(self.import_btn)
-        
-        # === 卡片 2: 系统状态 (示例) ===
-        card_stat = CardWidget("📊 系统状态", top_color="#28a745") # 绿色顶条
-        
-        stat_label = QLabel("AI 模型引擎: YOLOv8\nGPU 加速: 检测中...\n当前版本: 1.0.0 Dev")
-        stat_label.setStyleSheet("color: #555; line-height: 150%; font-size: 13px; border: none;")
-        card_stat.add_widget(stat_label)
+        self.titleLabel = SubtitleLabel("YinTu Desktop", self.heroCard)
+        self.descLabel = BodyLabel("导入图片文件夹（后续可扩展：导入视频自动抽帧）", self.heroCard)
+        self.descLabel.setWordWrap(True)
 
-        # 将卡片加入布局
-        cards_layout.addWidget(card_start, 2) # 权重2，宽一点
-        cards_layout.addWidget(card_stat, 1)  # 权重1，窄一点
-        
-        main_layout.addLayout(cards_layout)
-        main_layout.addStretch(1) # 下方留白
+        titleRowLayout.addWidget(self.icon, alignment=Qt.AlignmentFlag.AlignHCenter)
+        titleRowLayout.addWidget(self.titleLabel, alignment=Qt.AlignmentFlag.AlignHCenter)
+        titleRowLayout.addWidget(self.descLabel, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        heroLayout.addWidget(titleRow)
+
+        self.importBtn = PrimaryPushButton("选择项目目录", self)
+        self.importBtn.setIcon(FIF.FOLDER_ADD)
+        self.importBtn.clicked.connect(self.open_folder)
+
+        self.vBoxLayout.addStretch(1)
+        self.vBoxLayout.addWidget(self.heroCard, stretch=0)
+        self.vBoxLayout.addSpacing(8)
+        self.vBoxLayout.addWidget(self.importBtn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.vBoxLayout.addStretch(1)
 
     def open_folder(self):
-        folder_path = QFileDialog.getExistingDirectory(self, "选择项目目录")
-        if folder_path:
-            self.project_selected.emit(folder_path)
+        folder = QFileDialog.getExistingDirectory(self, "选择项目目录")
+        if folder:
+            self.project_selected.emit(str(Path(folder).resolve()))

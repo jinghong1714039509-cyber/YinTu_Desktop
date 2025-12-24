@@ -1,220 +1,293 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
-                               QPushButton, QLabel, QGraphicsView, 
-                               QGraphicsScene, QGraphicsRectItem, 
-                               QGraphicsPixmapItem, QGraphicsItem,
-                               QFrame, QMessageBox)
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush
+from __future__ import annotations
 
-# --- 1. 矩形框对象 ---
-class BoxItem(QGraphicsRectItem):
-    def __init__(self, x, y, w, h, label_text="Object"):
-        super().__init__(x, y, w, h)
-        self.label_text = label_text
-        self.setPen(QPen(QColor(0, 255, 0), 2)) # AI 的框用绿色
-        self.setBrush(QBrush(QColor(0, 255, 0, 30))) # 淡淡的填充
-        self.setFlags(QGraphicsItem.ItemIsSelectable | 
-                      QGraphicsItem.ItemIsMovable | 
-                      QGraphicsItem.ItemSendsGeometryChanges)
-        # 鼠标悬停显示标签信息
-        self.setToolTip(f"{label_text}")
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, List
 
-    def paint(self, painter, option, widget=None):
-        # 选中变红，未选中绿色
-        color = QColor(255, 0, 0) if self.isSelected() else QColor(0, 255, 0)
-        
-        pen = QPen(color, 2)
-        if self.isSelected():
-            pen.setStyle(Qt.DashLine)
-            
-        painter.setPen(pen)
-        painter.setBrush(QBrush(color.lighter(160)) if self.isSelected() else QBrush(Qt.NoBrush))
-        painter.drawRect(self.rect())
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
+    QScrollArea, QListWidget, QListWidgetItem, QSizePolicy
+)
 
-# --- 2. 画板 View (保持不变，略过重复代码以节省篇幅，功能与之前一致) ---
-class ImageGraphicsView(QGraphicsView):
-    def __init__(self, parent=None):
+from qfluentwidgets import (
+    CardWidget, TitleLabel, BodyLabel, PrimaryPushButton, PushButton
+)
+
+from app.services.data_manager import DataManager
+
+
+@dataclass
+class TaskViewModel:
+    id: int
+    file_path: str
+    status: int
+
+
+def _status_text(status: int) -> str:
+    if status == DataManager.STATUS_UNLABELED:
+        return "未标注"
+    if status == DataManager.STATUS_IN_PROGRESS:
+        return "标注中"
+    if status == DataManager.STATUS_DONE:
+        return "已标注"
+    return "未知"
+
+
+class TaskCard(CardWidget):
+    annotate_clicked = Signal(int)  # media_id
+
+    def __init__(self, task: TaskViewModel, parent=None):
         super().__init__(parent)
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.mode = 'VIEW' 
-        self.first_show = True
-        self.temp_item = None
-        self.start_point = None
+        self.task = task
+        self._build()
 
-    def set_mode(self, mode):
-        self.mode = mode
-        if mode == 'VIEW':
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.setCursor(Qt.OpenHandCursor)
-        else:
-            self.setDragMode(QGraphicsView.NoDrag)
-            self.setCursor(Qt.CrossCursor)
+    def _build(self):
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(84)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.first_show and self.scene() and self.scene().itemsBoundingRect().isValid():
-             self.fit_image_to_view()
-
-    def fit_image_to_view(self):
-        if self.scene() and self.scene().itemsBoundingRect().isValid():
-            rect = self.scene().itemsBoundingRect()
-            self.fitInView(rect, Qt.KeepAspectRatio)
-
-    def wheelEvent(self, event: QWheelEvent):
-        self.first_show = False
-        zoomInFactor = 1.15
-        zoomOutFactor = 1 / zoomInFactor
-        zoom_factor = zoomInFactor if event.angleDelta().y() > 0 else zoomOutFactor
-        self.scale(zoom_factor, zoom_factor)
-
-    def mousePressEvent(self, event):
-        if self.mode == 'DRAW' and event.button() == Qt.LeftButton:
-            self.start_point = self.mapToScene(event.pos())
-            self.temp_item = BoxItem(self.start_point.x(), self.start_point.y(), 0, 0, "New")
-            self.scene().addItem(self.temp_item)
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.mode == 'DRAW' and self.temp_item is not None:
-            current_point = self.mapToScene(event.pos())
-            rect = QRectF(self.start_point, current_point).normalized()
-            self.temp_item.setRect(0, 0, rect.width(), rect.height())
-            self.temp_item.setPos(rect.topLeft())
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self.mode == 'DRAW' and self.temp_item is not None:
-            if self.temp_item.rect().width() < 5 or self.temp_item.rect().height() < 5:
-                self.scene().removeItem(self.temp_item)
-            self.temp_item = None
-        else:
-            super().mouseReleaseEvent(event)
-
-# --- 3. 界面主体 ---
-class LabelInterface(QWidget):
-    # 发送这个信号，让 MainWindow 去调 Worker
-    request_ai_signal = Signal(str) 
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.current_image_path = None
-        self.initUI()
-
-    def initUI(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        # --- 侧边栏 ---
-        self.toolBar = QWidget()
-        self.toolBar.setFixedWidth(220)
-        self.toolBar.setStyleSheet("background-color: #f8f9fa; border-right: 1px solid #dee2e6; color: #333;")
-        
-        toolLayout = QVBoxLayout(self.toolBar)
-        toolLayout.setContentsMargins(15, 20, 15, 20)
-        toolLayout.setSpacing(10)
-        
-        toolTitle = QLabel("工具箱 / Tools")
-        toolTitle.setStyleSheet("font-weight: bold; font-size: 14px; color: #495057; margin-bottom: 10px; border: none;")
-        toolLayout.addWidget(toolTitle)
-        
-        btn_style = "QPushButton { background-color: #ffffff; color: #444; border: 1px solid #ced4da; padding: 8px; border-radius: 4px; text-align: left; } QPushButton:hover { background-color: #e9ecef; } QPushButton:checked { background-color: #007bff; color: white; }"
-        
-        self.btnHand = QPushButton("✋ 浏览模式 (View)")
-        self.btnHand.setCheckable(True)
-        self.btnHand.setStyleSheet(btn_style)
-        self.btnHand.clicked.connect(lambda: self.switch_mode('VIEW'))
-        
-        self.btnRect = QPushButton("✏️ 矩形标注 (Draw)")
-        self.btnRect.setCheckable(True)
-        self.btnRect.setStyleSheet(btn_style)
-        self.btnRect.clicked.connect(lambda: self.switch_mode('DRAW'))
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(14)
 
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #ccc; margin: 10px 0;")
+        # 左：文本
+        left = QWidget(self)
+        leftLayout = QVBoxLayout(left)
+        leftLayout.setContentsMargins(0, 0, 0, 0)
+        leftLayout.setSpacing(6)
 
-        self.btnPrev = QPushButton("⬅️ 上一张")
-        self.btnNext = QPushButton("➡️ 下一张")
-        self.btnPrev.setStyleSheet(btn_style)
-        self.btnNext.setStyleSheet(btn_style)
+        name = Path(self.task.file_path).name
+        self.title = TitleLabel(name, left)
+        self.title.setMaximumHeight(26)
 
-        # AI 按钮：点击后触发 request_ai
-        self.btnAI = QPushButton("🤖 AI 自动识别")
-        self.btnAI.setStyleSheet("QPushButton { background-color: #28a745; color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #218838; }")
-        self.btnAI.clicked.connect(self.request_ai)
-        
-        toolLayout.addWidget(self.btnHand)
-        toolLayout.addWidget(self.btnRect)
-        toolLayout.addWidget(line)
-        toolLayout.addWidget(self.btnPrev)
-        toolLayout.addWidget(self.btnNext)
-        toolLayout.addStretch(1)
-        toolLayout.addWidget(self.btnAI)
+        self.meta = BodyLabel(f"状态：{_status_text(self.task.status)}", left)
+        self.meta.setWordWrap(False)
 
-        # --- 画布 ---
-        self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QColor(50, 50, 50)) 
-        self.view = ImageGraphicsView(self.scene)
+        leftLayout.addWidget(self.title)
+        leftLayout.addWidget(self.meta)
 
-        layout.addWidget(self.toolBar)
-        layout.addWidget(self.view)
-        self.switch_mode('VIEW')
+        # 右：动作
+        self.btn = PrimaryPushButton("标注", self)
+        self.btn.clicked.connect(lambda: self.annotate_clicked.emit(self.task.id))
 
-    def switch_mode(self, mode):
-        self.view.set_mode(mode)
-        self.btnHand.setChecked(mode == 'VIEW')
-        self.btnRect.setChecked(mode == 'DRAW')
+        layout.addWidget(left, stretch=1)
+        layout.addWidget(self.btn, stretch=0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-    def load_image(self, image_path):
+    def set_selected(self, selected: bool):
+        # 轻量选中态：按钮文本变化（避免依赖复杂样式）
+        if selected:
+            self.btn.setText("继续标注")
+        else:
+            self.btn.setText("标注")
+
+
+class LabelInterface(QWidget):
+    """标注工作台
+
+    左侧：任务统计 + 任务列表（卡片）
+    右侧：标注画布（当前仅加载图片；标注能力后续逐步接入）
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.project_id: Optional[int] = None
+        self.current_task_id: Optional[int] = None
+        self.current_image_path: Optional[str] = None
+        self._task_cards: List[TaskCard] = []
+
+        self._build_ui()
+
+    # ---------------- UI ----------------
+    def _build_ui(self):
+        root = QHBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
+
+        # 左侧侧边栏
+        self.sidebar = CardWidget(self)
+        self.sidebar.setFixedWidth(360)
+        sideLayout = QVBoxLayout(self.sidebar)
+        sideLayout.setContentsMargins(16, 16, 16, 16)
+        sideLayout.setSpacing(12)
+
+        self.statTitle = TitleLabel("任务统计", self.sidebar)
+        sideLayout.addWidget(self.statTitle)
+
+        self.statList = QListWidget(self.sidebar)
+        self.statList.setFixedHeight(120)
+        self.statList.itemClicked.connect(self._on_stat_clicked)
+        sideLayout.addWidget(self.statList)
+
+        self.listTitle = TitleLabel("任务列表", self.sidebar)
+        sideLayout.addWidget(self.listTitle)
+
+        # 任务列表滚动区
+        self.scrollArea = QScrollArea(self.sidebar)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.scrollBody = QWidget(self.scrollArea)
+        self.scrollLayout = QVBoxLayout(self.scrollBody)
+        self.scrollLayout.setContentsMargins(0, 0, 0, 0)
+        self.scrollLayout.setSpacing(10)
+        self.scrollLayout.addStretch(1)
+
+        self.scrollArea.setWidget(self.scrollBody)
+        sideLayout.addWidget(self.scrollArea, stretch=1)
+
+        # 右侧标注区
+        self.canvasPanel = CardWidget(self)
+        canvasLayout = QVBoxLayout(self.canvasPanel)
+        canvasLayout.setContentsMargins(16, 16, 16, 16)
+        canvasLayout.setSpacing(10)
+
+        # 顶部工具条（后续你接入真正的标注逻辑时可以继续扩展）
+        topBar = QWidget(self.canvasPanel)
+        topBarLayout = QHBoxLayout(topBar)
+        topBarLayout.setContentsMargins(0, 0, 0, 0)
+        topBarLayout.setSpacing(10)
+
+        self.canvasTitle = TitleLabel("画布", topBar)
+        self.saveBtn = PushButton("保存", topBar)
+        self.doneBtn = PrimaryPushButton("完成", topBar)
+
+        self.saveBtn.clicked.connect(self._on_save)
+        self.doneBtn.clicked.connect(self._on_done)
+
+        topBarLayout.addWidget(self.canvasTitle, stretch=1)
+        topBarLayout.addWidget(self.saveBtn)
+        topBarLayout.addWidget(self.doneBtn)
+
+        canvasLayout.addWidget(topBar)
+
+        self.scene = QGraphicsScene(self)
+        self.view = QGraphicsView(self.scene, self.canvasPanel)
+        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        canvasLayout.addWidget(self.view, stretch=1)
+
+        root.addWidget(self.sidebar, stretch=0)
+        root.addWidget(self.canvasPanel, stretch=1)
+
+    # ---------------- Public API ----------------
+    def set_project(self, project_id: int):
+        self.project_id = project_id
+        self.current_task_id = None
+        self.current_image_path = None
+        self.scene.clear()
+        self.refresh()
+
+    def refresh(self, status_filter: Optional[int] = None):
+        if self.project_id is None:
+            return
+
+        # 1) 任务统计
+        stats = DataManager.get_task_stats(self.project_id)
+        self._render_stats(stats)
+
+        # 2) 任务列表
+        tasks = DataManager.get_project_media(self.project_id, status=status_filter)
+        self._render_task_cards(tasks)
+
+    # ---------------- Rendering ----------------
+    def _render_stats(self, stats: dict):
+        self.statList.clear()
+
+        items = [
+            ("未标注", DataManager.STATUS_UNLABELED, stats.get("unlabeled", 0)),
+            ("标注中", DataManager.STATUS_IN_PROGRESS, stats.get("in_progress", 0)),
+            ("已标注", DataManager.STATUS_DONE, stats.get("done", 0)),
+        ]
+        for text, status, count in items:
+            it = QListWidgetItem(f"{text}    {count}")
+            it.setData(Qt.ItemDataRole.UserRole, status)
+            self.statList.addItem(it)
+
+    def _render_task_cards(self, media_items):
+        # 清空旧卡片
+        for c in self._task_cards:
+            c.setParent(None)
+        self._task_cards.clear()
+
+        # 清空 layout（保留最后一个 stretch）
+        while self.scrollLayout.count() > 0:
+            item = self.scrollLayout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        # 重建
+        for m in media_items:
+            vm = TaskViewModel(id=m.id, file_path=m.file_path, status=m.label_status)
+            card = TaskCard(vm, self.scrollBody)
+            card.annotate_clicked.connect(self.open_task)
+            self._task_cards.append(card)
+            self.scrollLayout.addWidget(card)
+
+        self.scrollLayout.addStretch(1)
+
+        # 如果当前任务仍在过滤结果里，更新选中态
+        self._sync_selected_state()
+
+    def _sync_selected_state(self):
+        for c in self._task_cards:
+            c.set_selected(self.current_task_id == c.task.id)
+
+    # ---------------- Actions ----------------
+    def _on_stat_clicked(self, item: QListWidgetItem):
+        status = item.data(Qt.ItemDataRole.UserRole)
+        self.refresh(status_filter=status)
+
+    def open_task(self, media_id: int):
+        """从卡片点击进入标注（加载图片 + 标记为标注中）。"""
+        if self.project_id is None:
+            return
+
+        # 找到 media
+        tasks = DataManager.get_project_media(self.project_id)
+        m = next((x for x in tasks if x.id == media_id), None)
+        if not m:
+            return
+
+        self.current_task_id = m.id
+        self.load_image(m.file_path)
+
+        # 切到“标注中”
+        if m.label_status == DataManager.STATUS_UNLABELED:
+            DataManager.set_task_status(m.id, DataManager.STATUS_IN_PROGRESS)
+
+        self.refresh()  # 统计与列表同步
+        self._sync_selected_state()
+
+    def load_image(self, image_path: str):
         self.current_image_path = image_path
         self.scene.clear()
+
         pixmap = QPixmap(image_path)
-        if not pixmap.isNull():
-            item = QGraphicsPixmapItem(pixmap)
-            item.setTransformationMode(Qt.SmoothTransformation)
-            self.scene.addItem(item)
-            self.view.setSceneRect(0, 0, pixmap.width(), pixmap.height())
-            self.view.first_show = True
-            self.view.fit_image_to_view()
+        if pixmap.isNull():
+            self.canvasTitle.setText("画布（图片加载失败）")
+            return
 
-    def request_ai(self):
-        """点击按钮 -> 发送信号给主窗口"""
-        if self.current_image_path:
-            self.btnAI.setText("⏳ 正在识别...")
-            self.btnAI.setEnabled(False)
-            self.request_ai_signal.emit(self.current_image_path)
-        else:
-            QMessageBox.warning(self, "提示", "请先加载一张图片")
+        self.canvasTitle.setText(f"画布  ·  {Path(image_path).name}")
+        item = QGraphicsPixmapItem(pixmap)
+        self.scene.addItem(item)
+        self.view.setSceneRect(0, 0, pixmap.width(), pixmap.height())
+        self.view.fitInView(item, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def apply_ai_results(self, results):
-        """接收 AI 结果并在图上画框"""
-        self.btnAI.setText("🤖 AI 自动识别")
-        self.btnAI.setEnabled(True)
-        
-        img_w = self.view.sceneRect().width()
-        img_h = self.view.sceneRect().height()
+    def _on_save(self):
+        # 目前仅预留：未来你接入标注工具后，这里保存 annotation 到 DB / yolo txt
+        # 现在先确保状态至少是“标注中”
+        if self.current_task_id is None:
+            return
+        DataManager.set_task_status(self.current_task_id, DataManager.STATUS_IN_PROGRESS)
+        self.refresh()
 
-        for box in results:
-            # YOLO 返回的是 xywhn (归一化中心坐标)
-            # 需要转换为 左上角坐标 (x, y, w, h)
-            xc, yc, w_n, h_n = box['rect']
-            
-            # 计算像素值
-            w = w_n * img_w
-            h = h_n * img_h
-            x = (xc * img_w) - (w / 2)
-            y = (yc * img_h) - (h / 2)
-            
-            # 创建绿框
-            item = BoxItem(x, y, w, h, box['label'])
-            self.scene.addItem(item)
-        
-        QMessageBox.information(self, "完成", f"AI 识别到 {len(results)} 个物体")
+    def _on_done(self):
+        # “完成”= 置为已标注
+        if self.current_task_id is None:
+            return
+        DataManager.set_task_status(self.current_task_id, DataManager.STATUS_DONE)
+        self.refresh()
+        self._sync_selected_state()
