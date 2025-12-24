@@ -1,0 +1,6 @@
+PySide6>=6.4.0
+PyQt-Fluent-Widgets>=1.5.0
+peewee>=3.17.0
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+numpy>=1.24.0
