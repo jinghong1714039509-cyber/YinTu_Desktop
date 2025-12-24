@@ -18,4 +18,4 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # 业务配置
 DEFAULT_FPS = 2  # 默认每秒抽2帧
 SUPPORTED_VIDEO_EXT = ['.mp4', '.avi', '.mov', '.mkv']
-SUPPORTED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.bmp']s
+SUPPORTED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.bmp']

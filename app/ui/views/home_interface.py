@@ -1,8 +1,8 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Qt, Signal
+from app.ui.components.card import CardWidget
 
 class HomeInterface(QWidget):
-    # 定义一个信号：当用户选好文件夹后，把路径发出去
     project_selected = Signal(str)
 
     def __init__(self, parent=None):
@@ -10,49 +10,66 @@ class HomeInterface(QWidget):
         self.initUI()
 
     def initUI(self):
-        # 1. 布局管理
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignCenter) # 居中对齐
-        layout.setSpacing(20) # 控件间距
+        # 整体背景色设置为淡灰色 (AdminLTE 风格背景)
+        self.setStyleSheet("background-color: #f4f6f9;")
+        
+        # 主布局
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(20)
 
-        # 2. 标题
-        self.title_label = QLabel("欢迎使用 YinTu 智能标注系统")
-        self.title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #333;")
-        self.title_label.setAlignment(Qt.AlignCenter)
+        # --- 顶部欢迎语 ---
+        welcome_label = QLabel("仪表盘 / Dashboard")
+        welcome_label.setStyleSheet("font-size: 24px; color: #333; font-weight: bold; margin-bottom: 10px;")
+        main_layout.addWidget(welcome_label)
 
-        # 3. 说明文字
-        self.desc_label = QLabel("请导入包含视频或图片的文件夹以开始项目")
-        self.desc_label.setStyleSheet("font-size: 14px; color: #666;")
-        self.desc_label.setAlignment(Qt.AlignCenter)
+        # --- 卡片区域布局 (水平排列) ---
+        cards_layout = QHBoxLayout()
+        cards_layout.setSpacing(20)
 
-        # 4. 导入按钮
-        self.import_btn = QPushButton("打开/创建项目文件夹")
-        self.import_btn.setFixedSize(200, 50)
+        # === 卡片 1: 快速开始 ===
+        card_start = CardWidget("🚀 快速开始", top_color="#007bff") # 蓝色顶条
+        
+        start_desc = QLabel("导入包含视频或图片的文件夹以开始新的标注任务。")
+        start_desc.setWordWrap(True)
+        start_desc.setStyleSheet("color: #666; font-size: 14px; margin-bottom: 15px; border: none;")
+        
+        self.import_btn = QPushButton("📂 打开/创建项目文件夹")
+        self.import_btn.setCursor(Qt.PointingHandCursor)
+        self.import_btn.setFixedHeight(40)
+        # 扁平化按钮样式
         self.import_btn.setStyleSheet("""
             QPushButton {
-                background-color: #0078d4;
+                background-color: #007bff;
                 color: white;
-                border-radius: 5px;
-                font-size: 16px;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
             }
-            QPushButton:hover {
-                background-color: #1084d9;
-            }
+            QPushButton:hover { background-color: #0069d9; }
+            QPushButton:pressed { background-color: #0062cc; }
         """)
         self.import_btn.clicked.connect(self.open_folder)
 
-        # 5. 添加到布局
-        layout.addStretch(1) # 上方弹簧
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.desc_label)
-        layout.addWidget(self.import_btn)
-        layout.addStretch(1) # 下方弹簧
+        card_start.add_widget(start_desc)
+        card_start.add_widget(self.import_btn)
+        
+        # === 卡片 2: 系统状态 (示例) ===
+        card_stat = CardWidget("📊 系统状态", top_color="#28a745") # 绿色顶条
+        
+        stat_label = QLabel("AI 模型引擎: YOLOv8\nGPU 加速: 检测中...\n当前版本: 1.0.0 Dev")
+        stat_label.setStyleSheet("color: #555; line-height: 150%; font-size: 13px; border: none;")
+        card_stat.add_widget(stat_label)
+
+        # 将卡片加入布局
+        cards_layout.addWidget(card_start, 2) # 权重2，宽一点
+        cards_layout.addWidget(card_stat, 1)  # 权重1，窄一点
+        
+        main_layout.addLayout(cards_layout)
+        main_layout.addStretch(1) # 下方留白
 
     def open_folder(self):
-        # 调出原生的文件选择框
         folder_path = QFileDialog.getExistingDirectory(self, "选择项目目录")
-        
         if folder_path:
-            # 如果用户选了路径，就发射信号
-            print(f"用户选择了路径: {folder_path}") # 控制台打印一下
             self.project_selected.emit(folder_path)
