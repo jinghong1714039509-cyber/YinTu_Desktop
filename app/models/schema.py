@@ -1,75 +1,47 @@
-from __future__ import annotations
-
-from datetime import datetime
-from peewee import (
-    Model, SqliteDatabase,
-    CharField, DateTimeField, TextField,
-    ForeignKeyField, IntegerField, FloatField
-)
-
+from peewee import *
 from app.common.config import DB_PATH
+import datetime
 
-db = SqliteDatabase(str(DB_PATH))
-
+db = SqliteDatabase(DB_PATH)
 
 class BaseModel(Model):
     class Meta:
         database = db
 
-
 class Project(BaseModel):
-    """一个项目对应一个数据目录（图片/视频）。"""
     name = CharField()
-    path = CharField(unique=True)  # 项目根目录路径
-    created_at = DateTimeField(default=datetime.now)
+    path = CharField(unique=True)
     description = TextField(null=True)
-
+    model_path = CharField(null=True)
+    classes = TextField(null=True) 
+    created_at = DateTimeField(default=datetime.datetime.now)
 
 class MediaItem(BaseModel):
-    """一个媒体文件即一个标注任务（task）。"""
-    project = ForeignKeyField(Project, backref='media', on_delete='CASCADE')
-    file_path = CharField()               # 图片的绝对路径
-    media_type = CharField(default='image')   # 'image' 或 'extracted_frame'
-    source_video = CharField(null=True)   # 如果是抽帧，记录来源视频
-
-    # 任务状态：0=未标注 1=标注中 2=已标注
-    label_status = IntegerField(default=0)
-
-    width = IntegerField(null=True)
-    height = IntegerField(null=True)
-
-    class Meta:
-        indexes = (
-            (('project', 'file_path'), True),  # (project, file_path) 唯一，避免重复导入
-        )
-
+    project = ForeignKeyField(Project, backref='media')
+    file_path = CharField()
+    media_type = CharField(default='image') 
+    is_labeled = BooleanField(default=False)
+    created_at = DateTimeField(default=datetime.datetime.now)
 
 class Annotation(BaseModel):
-    media = ForeignKeyField(MediaItem, backref='annotations', on_delete='CASCADE')
-    label_class = CharField()   # 例如 'person', 'car'
-    x_center = FloatField()     # YOLO 格式归一化坐标
-    y_center = FloatField()
-    width = FloatField()
-    height = FloatField()
+    media_item = ForeignKeyField(MediaItem, backref='annotations')
+    label = CharField()
+    
+    # 矩形框数据 (归一化 cx, cy, w, h) - 即使是多边形也算一个包围盒存这里
+    x = FloatField(default=0)
+    y = FloatField(default=0)
+    w = FloatField(default=0)
+    h = FloatField(default=0)
+    
+    # 新增：形状类型 (rect / polygon)
+    shape_type = CharField(default='rect') 
+    
+    # 新增：多边形点集 (存 JSON 字符串: "[[0.1, 0.2], [0.3, 0.4]]")
+    points = TextField(null=True) 
+    
     confidence = FloatField(default=1.0)
+    created_at = DateTimeField(default=datetime.datetime.now)
 
-
-def _column_exists(table_name: str, column_name: str) -> bool:
-    rows = db.execute_sql(f'PRAGMA table_info("{table_name}")').fetchall()
-    cols = [r[1] for r in rows]  # r[1] = column name
-    return column_name in cols
-
-
-def _add_column_if_missing(model: type[Model], column_name: str, ddl: str) -> None:
-    """轻量级迁移：仅在缺列时 ALTER TABLE。"""
-    table = model._meta.table_name
-    if not _column_exists(table, column_name):
-        db.execute_sql(f'ALTER TABLE "{table}" ADD COLUMN {column_name} {ddl}')
-
-
-def init_db() -> None:
-    db.connect(reuse_if_open=True)
+def init_db():
+    db.connect()
     db.create_tables([Project, MediaItem, Annotation])
-
-    # 兼容旧库：补齐 label_status 字段
-    _add_column_if_missing(MediaItem, 'label_status', 'INTEGER DEFAULT 0')

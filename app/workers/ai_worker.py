@@ -1,42 +1,69 @@
+import sys
 from PySide6.QtCore import QThread, Signal
 from ultralytics import YOLO
-from app.common.logger import logger
 
-class AutoLabelWorker(QThread):
-    finished_signal = Signal(dict) # 返回 {path: [boxes...]}
+class AiWorker(QThread):
+    finished_signal = Signal(str, list)
+    error_signal = Signal(str)
 
-    def __init__(self, model_path, image_paths):
+    def __init__(self, model_path="yolov8n.pt", target_classes=None):
         super().__init__()
         self.model_path = model_path
-        self.image_paths = image_paths # 图片路径列表
+        self.target_classes = target_classes # List of strings: ['car', 'bus']
+        self.image_path = None
+        self.model = None
+
+    def update_config(self, model_path, target_classes_str):
+        """动态更新配置"""
+        if model_path and model_path != self.model_path:
+            self.model_path = model_path
+            self.model = None # 强制重新加载
+        
+        if target_classes_str:
+            self.target_classes = [c.strip() for c in target_classes_str.split(',') if c.strip()]
+        else:
+            self.target_classes = None
+
+    def set_image(self, image_path):
+        self.image_path = image_path
+
+    def load_model(self):
+        if self.model is None:
+            print(f"正在加载模型: {self.model_path}")
+            self.model = YOLO(self.model_path) 
 
     def run(self):
-        logger.info(f"开始加载模型: {self.model_path}")
+        if not self.image_path: return
+
         try:
-            model = YOLO(self.model_path)
-            results = model(self.image_paths, verbose=False)
+            self.load_model()
+            results = self.model(self.image_path)
             
-            output_data = {}
-            
-            for res in results:
-                path = res.path
-                boxes_list = []
-                for box in res.boxes:
-                    # 提取 xywhn (归一化坐标) 和 class
+            detected_boxes = []
+            for r in results:
+                for box in r.boxes:
+                    xywhn = box.xywhn[0].tolist() 
                     cls_id = int(box.cls[0])
-                    label_name = model.names[cls_id]
-                    xywh = box.xywhn[0].tolist() # x, y, w, h
-                    conf = float(box.conf[0])
                     
-                    boxes_list.append({
-                        "label": label_name,
-                        "rect": xywh,
+                    if hasattr(self.model, 'names'):
+                        label = self.model.names[cls_id]
+                    else:
+                        label = str(cls_id)
+                    
+                    # 核心过滤逻辑：如果用户指定了类别，且当前物体不在列表里，就跳过
+                    if self.target_classes and label not in self.target_classes:
+                        continue
+
+                    conf = float(box.conf[0])
+                    detected_boxes.append({
+                        "label": label,
+                        "rect": xywhn,
                         "conf": conf
                     })
-                output_data[path] = boxes_list
             
-            self.finished_signal.emit(output_data)
-            logger.info("AI 推理完成")
-            
+            self.finished_signal.emit(self.image_path, detected_boxes)
+
         except Exception as e:
-            logger.error(f"AI 推理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            self.error_signal.emit(str(e))
