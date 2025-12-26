@@ -227,6 +227,13 @@ class TaskListInterface(QWidget):
             data = dialog.get_data()
             try:
                 count = DataManager.export_dataset(project_obj, data['path'], data['format'])
-                QMessageBox.information(self, "成功", f"导出完成！共 {count} 张")
+                
+                # === 修复：使用白色背景的提示框 ===
+                msg = QMessageBox(self)
+                msg.setWindowTitle("导出成功")
+                msg.setText(f"成功导出 {count} 张标注数据！\n格式: {data['format']}")
+                msg.setStyleSheet("QMessageBox { background-color: white; color: #333; } QLabel { color: #333; }")
+                msg.exec()
+                
             except Exception as e:
                 QMessageBox.critical(self, "错误", str(e))

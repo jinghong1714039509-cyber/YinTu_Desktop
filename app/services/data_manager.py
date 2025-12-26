@@ -14,11 +14,26 @@ class DataManager:
     # ... 请直接保留原有的这几个方法，为了篇幅我这里省略重复代码 ...
     
     @staticmethod
-    def import_folder(folder_path, model_path=None, class_list_str=None):
-        folder_name = os.path.basename(folder_path)
+    def import_folder(path_str, model_path=None, class_list_str=None):
+        """导入文件夹 或 单个视频文件"""
+        
+        # 1. 判断是文件还是文件夹
+        is_file = os.path.isfile(path_str)
+        if is_file:
+            folder_name = os.path.basename(path_str) # 用文件名作为项目名
+            folder_path = os.path.dirname(path_str)  # 记录父级目录方便后续处理
+        else:
+            folder_name = os.path.basename(path_str)
+            folder_path = path_str
+
+        # 2. 创建项目
         project, created = Project.get_or_create(
-            path=folder_path,
-            defaults={'name': folder_name, 'model_path': model_path, 'classes': class_list_str}
+            path=path_str, # 存储用户选择的原始路径（可能是文件也可能是目录）
+            defaults={
+                'name': folder_name,
+                'model_path': model_path,
+                'classes': class_list_str
+            }
         )
         if not created:
             project.model_path = model_path
@@ -27,25 +42,38 @@ class DataManager:
         
         image_files = []
         video_files = []
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                full_path = os.path.join(root, file)
-                if ext in SUPPORTED_IMAGE_EXT:
-                    image_files.append(full_path)
-                elif ext in SUPPORTED_VIDEO_EXT:
-                    video_files.append(full_path)
+
+        # 3. 扫描文件
+        if is_file:
+            # 如果是单文件，直接判断类型
+            ext = os.path.splitext(path_str)[1].lower()
+            if ext in SUPPORTED_VIDEO_EXT:
+                video_files.append(path_str)
+            elif ext in SUPPORTED_IMAGE_EXT:
+                image_files.append(path_str)
+        else:
+            # 如果是文件夹，遍历扫描
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    full_path = os.path.join(root, file)
+                    if ext in SUPPORTED_IMAGE_EXT:
+                        image_files.append(full_path)
+                    elif ext in SUPPORTED_VIDEO_EXT:
+                        video_files.append(full_path)
         
-        existing_paths = {item.file_path for item in MediaItem.select(MediaItem.file_path).where(MediaItem.project == project)}
-        new_items = []
-        for img_path in image_files:
-            if img_path not in existing_paths:
-                new_items.append({'project': project, 'file_path': img_path, 'media_type': 'image'})
-        
-        if new_items:
-            with db.atomic():
-                for i in range(0, len(new_items), 100):
-                    MediaItem.insert_many(new_items[i:i+100]).execute()
+        # 4. 图片入库
+        if image_files:
+            existing_paths = {item.file_path for item in MediaItem.select(MediaItem.file_path).where(MediaItem.project == project)}
+            new_items = []
+            for img_path in image_files:
+                if img_path not in existing_paths:
+                    new_items.append({'project': project, 'file_path': img_path, 'media_type': 'image'})
+            
+            if new_items:
+                with db.atomic():
+                    for i in range(0, len(new_items), 100):
+                        MediaItem.insert_many(new_items[i:i+100]).execute()
                     
         return project, video_files, len(image_files)
 

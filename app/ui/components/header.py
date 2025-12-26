@@ -1,57 +1,71 @@
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 class Header(QFrame):
-    """仿 AdminLTE 顶部白色导航栏"""
+    """现代风格顶部导航栏 (含窗口控制)"""
+    # 定义信号，让主窗口去处理实际的窗口操作
+    min_clicked = Signal()
+    max_clicked = Signal()
+    close_clicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(57) # 标准高度
-        self.setStyleSheet("background-color: white; border-bottom: 1px solid #dee2e6;")
-        
+        self.setFixedHeight(50) 
+        # 背景透明，由主窗口统一控制圆角背景
+        self.setStyleSheet("background-color: transparent; border-bottom: 1px solid #eef1f6;")
         self.initUI()
 
     def initUI(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 0, 10, 0)
+        layout.setContentsMargins(20, 0, 15, 0)
+        layout.setSpacing(8)
 
-        # 左侧：汉堡菜单按钮 (装饰用)
-        self.btn_menu = QPushButton("☰")
-        self.btn_menu.setFixedSize(40, 40)
-        self.btn_menu.setCursor(Qt.PointingHandCursor)
-        self.btn_menu.setStyleSheet("""
-            QPushButton { border: none; font-size: 20px; color: #606060; }
-            QPushButton:hover { color: #333; }
-        """)
-        layout.addWidget(self.btn_menu)
+        # 左侧：Logo / 标题
+        logo = QLabel("YinTu")
+        logo.setStyleSheet("font-weight: 900; font-size: 16px; color: #007bff; font-family: 'Arial';")
+        layout.addWidget(logo)
+        
+        title = QLabel("Desktop")
+        title.setStyleSheet("font-weight: normal; font-size: 16px; color: #555; margin-left: 5px;")
+        layout.addWidget(title)
 
-        # 左侧：文字导航
-        lbl_home = QLabel("Home")
-        lbl_home.setStyleSheet("color: #707070; margin-left: 10px; font-size: 14px;")
-        layout.addWidget(lbl_home)
-
-        # 中间弹簧 (把后面的东西顶到右边)
         layout.addStretch(1)
 
-        # 右侧：功能图标
-        self.add_icon_btn("🔔") # 通知
-        self.add_icon_btn("⚙️") # 设置
+        # 右侧：窗口控制按钮组
+        # 1. 最小化
+        self.btn_min = self.create_win_btn("─", "最小化")
+        self.btn_min.clicked.connect(self.min_clicked.emit)
+        
+        # 2. 最大化/还原
+        self.btn_max = self.create_win_btn("□", "最大化")
+        self.btn_max.clicked.connect(self.max_clicked.emit)
+        
+        # 3. 关闭
+        self.btn_close = self.create_win_btn("✕", "关闭", is_close=True)
+        self.btn_close.clicked.connect(self.close_clicked.emit)
 
-        # --- 关键：关闭程序的按钮 ---
-        self.btn_close = QPushButton("✕")
-        self.btn_close.setFixedSize(45, 57)
-        self.btn_close.setCursor(Qt.PointingHandCursor)
-        self.btn_close.setStyleSheet("""
-            QPushButton { border: none; font-size: 16px; color: #707070; }
-            QPushButton:hover { background-color: #dc3545; color: white; }
-        """)
+        layout.addWidget(self.btn_min)
+        layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
 
-    def add_icon_btn(self, text):
+    def create_win_btn(self, text, tooltip, is_close=False):
         btn = QPushButton(text)
-        btn.setFixedSize(40, 40)
+        btn.setFixedSize(35, 30)
+        btn.setToolTip(tooltip)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet("""
-            QPushButton { border: none; font-size: 16px; color: #707070; }
-            QPushButton:hover { color: #333; }
+        
+        hover_color = "#dc3545" if is_close else "#e2e6ea"
+        text_color = "white" if is_close else "#333"
+        
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                border: none; border-radius: 4px; 
+                font-size: 14px; color: #888;
+                background-color: transparent;
+            }}
+            QPushButton:hover {{
+                background-color: {hover_color}; 
+                color: {text_color};
+            }}
         """)
-        self.layout().addWidget(btn)
+        return btn

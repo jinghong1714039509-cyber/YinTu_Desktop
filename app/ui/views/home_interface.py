@@ -7,12 +7,13 @@ from PySide6.QtGui import QColor
 from app.services.data_manager import DataManager
 
 # === 现代风格的新建项目对话框 ===
+# ... (前面的导入保持不变)
+
 class NewProjectDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("创建新任务")
         self.setFixedSize(480, 350)
-        # 现代简约风格
         self.setStyleSheet("""
             QDialog { background-color: #ffffff; }
             QLabel { font-size: 14px; color: #555; }
@@ -20,10 +21,10 @@ class NewProjectDialog(QDialog):
                 padding: 10px; border: 1px solid #e0e0e0; border-radius: 6px; background: #f9f9f9; font-size: 13px;
             }
             QLineEdit:focus { border: 1px solid #007bff; background: #fff; }
-            QPushButton#browseBtn {
+            QPushButton {
                 padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 6px; background: #f0f2f5; color: #555;
             }
-            QPushButton#browseBtn:hover { background: #e5e7eb; }
+            QPushButton:hover { background: #e5e7eb; }
         """)
         self.folder_path = ""
         self.model_path = ""
@@ -44,20 +45,27 @@ class NewProjectDialog(QDialog):
         
         # 1. 任务名称
         self.input_name = QLineEdit()
-        self.input_name.setPlaceholderText("任务名称（可选，默认使用文件夹名）")
+        self.input_name.setPlaceholderText("任务名称（可选）")
         form.addRow("名称:", self.input_name)
 
-        # 2. 文件路径
+        # 2. 文件路径 (修改点：增加选择视频按钮)
         path_layout = QHBoxLayout()
         self.path_edit = QLineEdit()
         self.path_edit.setReadOnly(True)
-        self.path_edit.setPlaceholderText("请选择数据文件夹...")
-        btn_folder = QPushButton("浏览...")
-        btn_folder.setObjectName("browseBtn")
+        self.path_edit.setPlaceholderText("选择文件夹或视频...")
+        
+        btn_folder = QPushButton("📁 文件夹")
+        btn_folder.setToolTip("选择图片文件夹")
         btn_folder.clicked.connect(self.select_folder)
+        
+        btn_video = QPushButton("🎬 视频")
+        btn_video.setToolTip("选择单个视频文件")
+        btn_video.clicked.connect(self.select_video)
+        
         path_layout.addWidget(self.path_edit)
         path_layout.addWidget(btn_folder)
-        form.addRow("目录:", path_layout)
+        path_layout.addWidget(btn_video)
+        form.addRow("数据源:", path_layout)
 
         # 3. 选择模型
         model_layout = QHBoxLayout()
@@ -65,7 +73,6 @@ class NewProjectDialog(QDialog):
         self.model_edit.setReadOnly(True)
         self.model_edit.setPlaceholderText("默认 (yolov8n.pt)")
         btn_model = QPushButton("选择...")
-        btn_model.setObjectName("browseBtn")
         btn_model.clicked.connect(self.select_model)
         model_layout.addWidget(self.model_edit)
         model_layout.addWidget(btn_model)
@@ -73,36 +80,26 @@ class NewProjectDialog(QDialog):
 
         # 4. 添加标签
         self.input_classes = QLineEdit()
-        self.input_classes.setPlaceholderText("例如: person, car (用逗号分隔)")
+        self.input_classes.setPlaceholderText("例如: person, car")
         form.addRow("标签:", self.input_classes)
 
         layout.addLayout(form)
         layout.addStretch(1)
 
-        # 底部按钮
+        # 按钮
         btn_box = QHBoxLayout()
         btn_box.addStretch(1)
         
         btn_cancel = QPushButton("取消")
-        btn_cancel.setCursor(Qt.PointingHandCursor)
-        btn_cancel.setStyleSheet("""
-            padding: 8px 20px; border: 1px solid #dce0e4; border-radius: 6px; background: white; color: #666; font-weight: 500;
-        """)
         btn_cancel.clicked.connect(self.reject)
         
         btn_ok = QPushButton("立即创建")
-        btn_ok.setCursor(Qt.PointingHandCursor)
-        # 主色调按钮
-        btn_ok.setStyleSheet("""
-            QPushButton { padding: 8px 25px; border: none; border-radius: 6px; background: #007bff; color: white; font-weight: bold; }
-            QPushButton:hover { background: #0069d9; }
-        """)
+        btn_ok.setStyleSheet("background: #007bff; color: white; border: none; font-weight: bold;")
         btn_ok.clicked.connect(self.accept)
         
         btn_box.addWidget(btn_cancel)
         btn_box.addSpacing(10)
         btn_box.addWidget(btn_ok)
-        
         layout.addLayout(btn_box)
 
     def select_folder(self):
@@ -113,6 +110,16 @@ class NewProjectDialog(QDialog):
             if not self.input_name.text():
                 import os
                 self.input_name.setText(os.path.basename(d))
+
+    # 新增：选择视频文件
+    def select_video(self):
+        f, _ = QFileDialog.getOpenFileName(self, "选择视频文件", "", "Video Files (*.mp4 *.avi *.mov *.mkv)")
+        if f:
+            self.folder_path = f
+            self.path_edit.setText(f)
+            if not self.input_name.text():
+                import os
+                self.input_name.setText(os.path.basename(f))
 
     def select_model(self):
         f, _ = QFileDialog.getOpenFileName(self, "选择模型", "", "YOLO Models (*.pt)")
@@ -128,7 +135,7 @@ class NewProjectDialog(QDialog):
             'model': self.model_path if self.model_path else None,
             'classes': self.input_classes.text().strip()
         }
-
+# ...
 # ... (StatCard 和 HomeInterface 的其余部分不需要变，为了简洁这里省略) ...
 
 # === 统计卡片 (保持不变) ===
