@@ -1,146 +1,133 @@
+import os
+import sys
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QFrame, QHBoxLayout
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFont, QCursor, QColor, QPalette
+from PySide6.QtGui import QFont, QIcon, QPainter, QColor, QPixmap
+
+# === 帮助函数：获取图标绝对路径 ===
+def get_icon_path(icon_name):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+    path = os.path.join(project_root, "app", "assets", "icons", icon_name)
+    if os.path.exists(path):
+        return path
+    path_local = os.path.abspath(os.path.join("app", "assets", "icons", icon_name))
+    if os.path.exists(path_local):
+        return path_local
+    return None
 
 class SidebarItem(QPushButton):
-    """
-    自定义侧边栏按钮
-    """
-    def __init__(self, text, icon_text="●", parent=None):
-        super().__init__(parent)
-        self.setText(f" {icon_text}   {text}")
-        self.setFixedHeight(50) 
+    def __init__(self, icon_name, tooltip, parent=None):
+        super().__init__(parent=parent)
+        self.setFixedSize(44, 44) 
         self.setCursor(Qt.PointingHandCursor)
-        
-        font = QFont("Microsoft YaHei UI", 10)
-        font.setWeight(QFont.Medium)
-        self.setFont(font)
-        
+        self.setToolTip(tooltip)
         self.setCheckable(True)
         
+        self.icon_name = icon_name
+        self.icon_path = get_icon_path(icon_name)
+        
+        self.update_icon_color()
+
         self.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
-                color: #c2c7d0;
-                text-align: left;
-                padding-left: 20px;
+                border-radius: 12px;
                 border: none;
-                border-left: 3px solid transparent;
             }
             QPushButton:hover {
-                background-color: #494e53;
-                color: white;
+                background-color: #E0E0E0;
             }
             QPushButton:checked {
-                background-color: #007bff; 
-                color: white;
-                border-left: 3px solid #0056b3; 
-                font-weight: bold;
+                background-color: #E6F0FF;
             }
         """)
+        
+        self.toggled.connect(self.update_icon_color)
+
+    def update_icon_color(self):
+        if not self.icon_path:
+            self.setText(self.icon_name[0].upper() if self.icon_name else "?") 
+            return
+            
+        pixmap = QPixmap(self.icon_path)
+        target_color = QColor("#3B82F6") if self.isChecked() else QColor("#555555")
+        
+        if not pixmap.isNull():
+            mask = pixmap.createMaskFromColor(Qt.transparent, Qt.MaskInColor)
+            pixmap.fill(target_color)
+            pixmap.setMask(mask)
+            self.setIcon(QIcon(pixmap))
+            self.setIconSize(QSize(24, 24))
+            self.setText("")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.isChecked():
+            painter = QPainter(self)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#3B82F6"))
+            painter.drawRoundedRect(0, 12, 3, 20, 1.5, 1.5)
 
 class Sidebar(QFrame):
     page_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(250) 
-        
-        # === 关键修改：添加左侧圆角，匹配主窗口 ===
+        self.setFixedWidth(68) 
         self.setStyleSheet("""
             Sidebar {
-                background-color: #343a40;
+                background-color: #F3F3F3; 
+                border-right: 1px solid #E0E0E0; 
                 border-top-left-radius: 12px;
                 border-bottom-left-radius: 12px;
             }
         """)
-        
         self.current_btn = None
         self.initUI()
 
     def initUI(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(0, 20, 0, 20)
+        layout.setSpacing(15)
+        layout.setAlignment(Qt.AlignHCenter)
 
-        # === 1. Logo 区域 ===
-        logo_box = QFrame()
-        logo_box.setFixedHeight(60)
-        # 注意：这里去掉了背景色，让它透出 Sidebar 的圆角背景，或者单独设置圆角
-        logo_box.setStyleSheet("background-color: transparent; border-bottom: 1px solid #4b545c;")
-        logo_layout = QHBoxLayout(logo_box)
-        logo_layout.setContentsMargins(15, 0, 0, 0)
-        
-        logo_icon = QLabel("Y")
-        logo_icon.setFixedSize(32, 32)
-        logo_icon.setAlignment(Qt.AlignCenter)
-        logo_icon.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; font-size: 18px; border-radius: 4px;")
-        
-        logo_text = QLabel("YinTu Admin")
-        logo_text.setStyleSheet("color: white; font-size: 18px; font-weight: 300; margin-left: 10px; background-color: transparent;")
-        
-        logo_layout.addWidget(logo_icon)
-        logo_layout.addWidget(logo_text)
-        logo_layout.addStretch(1)
-        layout.addWidget(logo_box)
+        logo = QLabel("Y")
+        logo.setFixedSize(40, 40)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #2563EB); color: white; font-weight: 900; font-size: 20px; border-radius: 10px;")
+        layout.addWidget(logo)
+        layout.addSpacing(20)
 
-        # === 2. 用户信息区 ===
-        user_box = QFrame()
-        user_box.setFixedHeight(70)
-        user_box.setStyleSheet("border-bottom: 1px solid #4b545c; background-color: transparent;")
-        user_layout = QHBoxLayout(user_box)
-        user_layout.setContentsMargins(15, 0, 0, 0)
-        
-        user_avatar = QLabel("A")
-        user_avatar.setFixedSize(35, 35)
-        user_avatar.setAlignment(Qt.AlignCenter)
-        user_avatar.setStyleSheet("background-color: #6c757d; color: white; border-radius: 17px; font-weight: bold;")
-        
-        info_layout = QVBoxLayout()
-        info_layout.setAlignment(Qt.AlignVCenter)
-        info_layout.setSpacing(2)
-        
-        user_name = QLabel("Administrator")
-        user_name.setStyleSheet("color: #c2c7d0; font-size: 14px; font-weight: bold; background-color: transparent;")
-        
-        user_status = QLabel("● Online")
-        user_status.setStyleSheet("color: #28a745; font-size: 11px; background-color: transparent;") 
-        
-        info_layout.addWidget(user_name)
-        info_layout.addWidget(user_status)
-        
-        user_layout.addWidget(user_avatar)
-        user_layout.addLayout(info_layout)
-        user_layout.addStretch(1)
-        layout.addWidget(user_box)
-
-        # === 3. 导航菜单标题 ===
-        menu_title = QLabel("主导航 / MAIN NAVIGATION")
-        menu_title.setFixedHeight(35)
-        menu_title.setStyleSheet("color: #6c757d; font-size: 11px; font-weight: bold; background-color: transparent; padding-top: 10px; padding-left: 15px;")
-        layout.addWidget(menu_title)
-
-        # === 4. 导航按钮组 ===
-        self.btn_tasks = SidebarItem("任务列表 Task List", "📋")
+        # 确保这些 SVG 文件名与您文件夹里的一致
+        self.btn_tasks = SidebarItem("folder.svg", "任务列表")
         self.btn_tasks.clicked.connect(lambda: self.on_nav_click("tasks", self.btn_tasks))
         layout.addWidget(self.btn_tasks)
-        
+
+        self.btn_label = SidebarItem("edit.svg", "标注工作台")
+        self.btn_label.setCheckable(True)
+        layout.addWidget(self.btn_label)
+
+        self.btn_ai = SidebarItem("brain.svg", "AI 模型")
+        layout.addWidget(self.btn_ai)
+
+        self.btn_stats = SidebarItem("chart.svg", "统计报表")
+        layout.addWidget(self.btn_stats)
+
         layout.addStretch(1)
 
-        # === 5. 底部版本号 ===
-        version_lbl = QLabel("Version 1.0.0")
-        version_lbl.setAlignment(Qt.AlignCenter)
-        version_lbl.setStyleSheet("color: #505050; font-size: 10px; margin-bottom: 10px; background-color: transparent;")
-        layout.addWidget(version_lbl)
+        self.btn_settings = SidebarItem("settings.svg", "设置")
+        layout.addWidget(self.btn_settings)
+        
+        self.btn_user = SidebarItem("user.svg", "用户")
+        layout.addWidget(self.btn_user)
 
-        # 默认选中
         self.btn_tasks.setChecked(True)
         self.current_btn = self.btn_tasks
 
     def on_nav_click(self, page_name, sender_btn):
         if self.current_btn != sender_btn:
-            if self.current_btn:
-                self.current_btn.setChecked(False)
+            if self.current_btn: self.current_btn.setChecked(False)
             sender_btn.setChecked(True)
             self.current_btn = sender_btn
             self.page_changed.emit(page_name)

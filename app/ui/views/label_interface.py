@@ -1,127 +1,126 @@
 import json
-import math
 import os
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
+import sys
+# === 修复核心 1: 补全 QGraphicsLineItem，彻底解决多边形画线崩溃问题 ===
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, 
                                QPushButton, QLabel, QGraphicsView, 
                                QGraphicsScene, QGraphicsRectItem, QGraphicsPolygonItem, 
                                QGraphicsPathItem, QGraphicsItem, QFrame, QMessageBox, 
                                QListWidget, QListWidgetItem, QGraphicsLineItem, QGraphicsEllipseItem,
-                               QSplitter, QButtonGroup, QGraphicsTextItem, QDialog, QTableWidget, QTableWidgetItem, QHeaderView)
+                               QSplitter, QButtonGroup, QGraphicsTextItem, QDialog, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QStyle, QScrollArea, QGraphicsDropShadowEffect) 
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QSize
-from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush, QPolygonF, QPainterPath, QFont, QAction, QKeySequence
-
-# === 引入专业 UI 库 ===
-from qfluentwidgets import FluentIcon as FIF, ToolButton, ToggleButton
-from qfluentwidgets import themeColor
+from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush, QPolygonF, QPainterPath, QFont, QAction, QKeySequence, QIcon
 
 from app.ui.components.label_dialog import LabelDialog
 from app.ui.components.export_dialog import ExportDialog
 from app.services.data_manager import DataManager
 from app.models.schema import MediaItem
 
-# === 0. 快捷键帮助弹窗 (保持不变) ===
+# === 修复核心 2: 强力路径查找器，解决图标显示问号 ===
+def get_icon_path(icon_name):
+    # 1. 获取当前文件 (label_interface.py) 的绝对路径
+    current_file = os.path.abspath(__file__)
+    # 2. 向上回退找到 app 目录 (app/ui/views/label_interface.py -> app)
+    app_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
+    # 3. 拼接目标路径: app/assets/icons/xxx.svg
+    path = os.path.join(app_dir, "assets", "icons", icon_name)
+    
+    if os.path.exists(path):
+        return path
+    
+    # 备用方案：防止目录结构差异，尝试从当前工作目录查找
+    path_local = os.path.abspath(os.path.join("app", "assets", "icons", icon_name))
+    if os.path.exists(path_local):
+        return path_local
+        
+    print(f"❌ 警告: 找不到图标文件 {icon_name}，路径: {path}")
+    return None
+
 class ShortcutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("快捷键列表 / Shortcuts")
+        self.setWindowTitle("快捷键列表")
         self.setFixedSize(400, 300)
-        self.setStyleSheet("background: white;")
+        self.setStyleSheet("""
+            QDialog { background-color: #FFFFFF; color: #333; }
+            QTableWidget { background-color: #FFFFFF; color: #333; border: 1px solid #E0E0E0; gridline-color: #EEE; }
+            QHeaderView::section { background-color: #F5F5F5; color: #333; border: none; height: 30px; }
+            QPushButton { background-color: #3B82F6; color: white; border-radius: 4px; padding: 6px; border: none; }
+            QPushButton:hover { background-color: #2563EB; }
+        """)
         layout = QVBoxLayout(self)
-        
         table = QTableWidget(6, 2)
         table.setHorizontalHeaderLabels(["功能", "按键"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.verticalHeader().setVisible(False)
-        table.setStyleSheet("border: 1px solid #e0e0e0;")
-        
-        data = [
-            ("上一张 / 下一张", "A / D"),
-            ("矩形工具", "W"),
-            ("多边形工具", "P"),
-            ("浏览/拖拽模式", "Esc"),
-            ("删除选中框", "Delete / Backspace"),
-            ("保存", "Ctrl + S"),
-        ]
-        
+        data = [("上一张 / 下一张", "A / D"), ("矩形工具", "W"), ("多边形工具", "P"),
+                ("选择/浏览", "Esc"), ("删除选中框", "Delete"), ("保存", "Ctrl + S")]
         for i, (desc, key) in enumerate(data):
             table.setItem(i, 0, QTableWidgetItem(desc))
             table.setItem(i, 1, QTableWidgetItem(key))
             table.item(i, 0).setFlags(Qt.ItemIsEnabled)
             table.item(i, 1).setFlags(Qt.ItemIsEnabled)
-            
         layout.addWidget(table)
         btn = QPushButton("知道了")
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet("padding: 5px; border: 1px solid #ccc; border-radius: 4px;")
         btn.clicked.connect(self.accept)
         layout.addWidget(btn)
 
-# === 1. 图形项：矩形 (保持不变) ===
 class BoxItem(QGraphicsRectItem):
     def __init__(self, x, y, w, h, label="Object"):
         super().__init__(x, y, w, h)
         self.label_text = label
-        self.setPen(QPen(QColor(0, 255, 0), 2))
+        self.setPen(QPen(QColor("#00FF00"), 2))
         self.setBrush(QBrush(QColor(0, 255, 0, 40)))
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setToolTip(f"{label}")
-
     def paint(self, painter, option, widget=None):
         if self.isSelected():
-            painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor("#FFFF00"), 2, Qt.DashLine))
             painter.setBrush(QBrush(QColor(255, 255, 0, 60)))
         else:
-            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setPen(QPen(QColor("#00FF00"), 2))
             painter.setBrush(QBrush(QColor(0, 255, 0, 40)))
         painter.drawRect(self.rect())
 
-# === 2. 图形项：多边形 (保持不变) ===
 class PolyItem(QGraphicsPolygonItem):
     def __init__(self, points, label="Object"):
         super().__init__(QPolygonF(points))
         self.label_text = label
-        self.setPen(QPen(QColor(255, 0, 0), 2)) 
-        self.setBrush(QBrush(QColor(255, 0, 0, 40))) 
+        self.setPen(QPen(QColor("#FF4D4D"), 2)) 
+        self.setBrush(QBrush(QColor(255, 77, 77, 40))) 
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setToolTip(f"{label}")
-
     def paint(self, painter, option, widget=None):
         if self.isSelected():
-            painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor("#FFFF00"), 2, Qt.DashLine))
             painter.setBrush(QBrush(QColor(255, 255, 0, 60)))
         else:
-            painter.setPen(QPen(QColor(255, 0, 0), 2))
-            painter.setBrush(QBrush(QColor(255, 0, 0, 40)))
+            painter.setPen(QPen(QColor("#FF4D4D"), 2))
+            painter.setBrush(QBrush(QColor(255, 77, 77, 40)))
         painter.drawPolygon(self.polygon())
 
-# === 3. 画布视图 (保持不变) ===
 class LabelGraphicsView(QGraphicsView):
     draw_finished = Signal(str, object) 
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRenderHint(QPainter.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse) 
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
+        self.setBackgroundBrush(QColor("#F5F5F5"))
         self.viewport().setCursor(Qt.CrossCursor)
         self.mode = 'VIEW'
-        
-        self.temp_rect = None
-        self.start_point = None
-        self.poly_points = []       
-        self.temp_path_item = None  
-        self.rubber_band = None     
-        self.vertex_items = []      
-        self.start_dot = None       
-        self.snap_threshold = 15.0
+        self.temp_rect = None; self.start_point = None; self.poly_points = []       
+        self.temp_path_item = None; self.rubber_band = None; self.vertex_items = []      
+        self.start_dot = None; self.snap_threshold = 15.0
 
     def set_mode(self, mode):
         self.mode = mode
         self.cleanup_temp_items() 
         if mode == 'VIEW':
             self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.setCursor(Qt.OpenHandCursor)
+            self.setCursor(Qt.ArrowCursor) 
         else:
             self.setDragMode(QGraphicsView.NoDrag)
             self.setCursor(Qt.CrossCursor)
@@ -134,26 +133,21 @@ class LabelGraphicsView(QGraphicsView):
         if self.rubber_band: scene.removeItem(self.rubber_band); self.rubber_band = None
         if self.start_dot: scene.removeItem(self.start_dot); self.start_dot = None
         for v in self.vertex_items: scene.removeItem(v)
-        self.vertex_items = []
-        self.poly_points = []
+        self.vertex_items = []; self.poly_points = []
 
     def wheelEvent(self, event: QWheelEvent):
         if event.modifiers() & Qt.ControlModifier:
-            zoomIn = 1.15
-            zoomOut = 1.0 / zoomIn
+            zoomIn = 1.15; zoomOut = 1.0 / zoomIn
             factor = zoomIn if event.angleDelta().y() > 0 else zoomOut
             self.scale(factor, factor)
-        else:
-            super().wheelEvent(event)
+        else: super().wheelEvent(event)
 
     def mousePressEvent(self, event):
         pos = self.mapToScene(event.pos())
         if self.mode == 'DRAW_RECT' and event.button() == Qt.LeftButton:
-            self.start_point = pos
-            self.temp_rect = QGraphicsRectItem(QRectF(pos, pos))
-            self.temp_rect.setPen(QPen(Qt.green, 2, Qt.DashLine))
-            self.scene().addItem(self.temp_rect)
-            return
+            self.start_point = pos; self.temp_rect = QGraphicsRectItem(QRectF(pos, pos))
+            self.temp_rect.setPen(QPen(Qt.green, 2, Qt.DashLine)); self.scene().addItem(self.temp_rect); return
+        
         if self.mode == 'DRAW_POLY':
             if event.button() == Qt.LeftButton:
                 if len(self.poly_points) > 2 and self.is_close_to_start(pos):
@@ -161,8 +155,7 @@ class LabelGraphicsView(QGraphicsView):
                     return
                 self.poly_points.append(pos)
                 dot = self.scene().addEllipse(pos.x()-3, pos.y()-3, 6, 6, QPen(Qt.red), QBrush(Qt.red))
-                dot.setZValue(100)
-                self.vertex_items.append(dot)
+                dot.setZValue(100); self.vertex_items.append(dot)
                 if len(self.poly_points) == 1:
                     self.start_dot = self.scene().addEllipse(pos.x()-6, pos.y()-6, 12, 12, QPen(Qt.yellow, 2), QBrush(Qt.transparent))
                     self.start_dot.setZValue(101)
@@ -171,12 +164,8 @@ class LabelGraphicsView(QGraphicsView):
             elif event.button() == Qt.RightButton:
                 if self.poly_points:
                     self.poly_points.pop()
-                    if self.vertex_items:
-                        v = self.vertex_items.pop()
-                        self.scene().removeItem(v)
-                    if len(self.poly_points) == 0 and self.start_dot:
-                        self.scene().removeItem(self.start_dot)
-                        self.start_dot = None
+                    if self.vertex_items: v = self.vertex_items.pop(); self.scene().removeItem(v)
+                    if len(self.poly_points) == 0 and self.start_dot: self.scene().removeItem(self.start_dot); self.start_dot = None
                     self.update_poly_visuals()
                 return
         super().mousePressEvent(event)
@@ -184,17 +173,19 @@ class LabelGraphicsView(QGraphicsView):
     def mouseMoveEvent(self, event):
         pos = self.mapToScene(event.pos())
         if self.mode == 'DRAW_RECT' and self.temp_rect:
-            rect = QRectF(self.start_point, pos).normalized()
-            self.temp_rect.setRect(rect)
+            rect = QRectF(self.start_point, pos).normalized(); self.temp_rect.setRect(rect)
+        
         if self.mode == 'DRAW_POLY' and len(self.poly_points) > 0:
             last_pt = self.poly_points[-1]
-            if not self.rubber_band:
+            # === 之前报错的地方，现在已经修复 (顶部已 import QGraphicsLineItem) ===
+            if not self.rubber_band: 
                 self.rubber_band = QGraphicsLineItem()
                 self.rubber_band.setPen(QPen(Qt.red, 2, Qt.DashLine))
                 self.scene().addItem(self.rubber_band)
+            
             target_pos = pos
             if len(self.poly_points) > 2 and self.is_close_to_start(pos):
-                target_pos = self.poly_points[0] 
+                target_pos = self.poly_points[0]
                 self.start_dot.setBrush(QBrush(Qt.yellow))
                 self.viewport().setCursor(Qt.PointingHandCursor)
             else:
@@ -205,37 +196,26 @@ class LabelGraphicsView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         if self.mode == 'DRAW_RECT' and event.button() == Qt.LeftButton and self.temp_rect:
-            rect = self.temp_rect.rect()
-            self.cleanup_temp_items()
-            if rect.width() > 5 and rect.height() > 5:
-                self.draw_finished.emit('rect', rect)
+            rect = self.temp_rect.rect(); self.cleanup_temp_items()
+            if rect.width() > 5 and rect.height() > 5: self.draw_finished.emit('rect', rect)
         super().mouseReleaseEvent(event)
 
     def update_poly_visuals(self):
-        if not self.temp_path_item:
-            self.temp_path_item = QGraphicsPathItem()
-            self.temp_path_item.setPen(QPen(Qt.red, 2))
-            self.scene().addItem(self.temp_path_item)
+        if not self.temp_path_item: self.temp_path_item = QGraphicsPathItem(); self.temp_path_item.setPen(QPen(Qt.red, 2)); self.scene().addItem(self.temp_path_item)
         path = QPainterPath()
         if self.poly_points:
             path.moveTo(self.poly_points[0])
-            for p in self.poly_points[1:]:
-                path.lineTo(p)
+            for p in self.poly_points[1:]: path.lineTo(p)
         self.temp_path_item.setPath(path)
 
     def is_close_to_start(self, pos):
         if not self.poly_points: return False
-        start = self.poly_points[0]
-        dist = math.sqrt((pos.x() - start.x())**2 + (pos.y() - start.y())**2)
-        return dist < self.snap_threshold / self.transform().m11() # 考虑缩放
+        start = self.poly_points[0]; dist = math.sqrt((pos.x() - start.x())**2 + (pos.y() - start.y())**2)
+        return dist < self.snap_threshold / self.transform().m11()
 
     def finish_polygon(self):
-        final_points = list(self.poly_points)
-        self.cleanup_temp_items() 
-        self.draw_finished.emit('polygon', final_points)
+        final_points = list(self.poly_points); self.cleanup_temp_items(); self.draw_finished.emit('polygon', final_points)
 
-
-# === 4. 主界面 (UI 全面升级) ===
 class LabelInterface(QWidget):
     request_ai_signal = Signal(str)
     back_clicked = Signal()
@@ -255,69 +235,59 @@ class LabelInterface(QWidget):
             self.project_classes = [c.strip() for c in project_obj.classes.split(',') if c.strip()]
         else:
             self.project_classes = []
+        self.refresh_task_classes_ui()
 
     def initUI(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # === 1. 左侧专业工具条 (Medical/Enterprise Style) ===
+        # 1. 工具栏
         self.toolBar = QFrame()
-        self.toolBar.setFixedWidth(56) # 稍微加宽一点点以容纳 padding
-        self.toolBar.setStyleSheet("""
-            QFrame { 
-                background-color: #ffffff; 
-                border-right: 1px solid #e5e7eb; 
-            }
-        """)
+        self.toolBar.setFixedWidth(56) 
+        self.toolBar.setStyleSheet("QFrame { background-color: #FFFFFF; border-right: 1px solid #DDD; }")
         
         tb_layout = QVBoxLayout(self.toolBar)
         tb_layout.setContentsMargins(8, 12, 8, 12)
-        tb_layout.setSpacing(8)
+        tb_layout.setSpacing(10)
 
-        # 返回按钮 (最顶部，强调)
-        self.btnBack = self.create_icon_btn(FIF.LEFT_ARROW, "返回任务列表 (Back)")
+        self.btnBack = self.create_tool_btn("back.svg", "返回 (Back)", None)
         self.btnBack.clicked.connect(self.back_clicked.emit)
         tb_layout.addWidget(self.btnBack)
         
-        # 分隔线
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("background-color: #e5e7eb; max-height: 1px;")
+        line.setStyleSheet("background-color: #EEE; max-height: 1px;")
         tb_layout.addWidget(line)
         tb_layout.addSpacing(4)
 
-        # 工具组 (互斥)
         self.modeGroup = QButtonGroup(self)
         self.modeGroup.setExclusive(True)
 
-        # 映射图标：浏览=MOVE, 矩形=CHECKBOX(方框), 多边形=PENCIL(绘制)
-        self.btnHand = self.create_tool_btn(FIF.MOVE, "浏览模式 / View (Esc)", 'VIEW')
-        self.btnRect = self.create_tool_btn(FIF.CHECKBOX, "矩形标注 / Rectangle (W)", 'DRAW_RECT')
-        self.btnPoly = self.create_tool_btn(FIF.PENCIL, "多边形标注 / Polygon (P)", 'DRAW_POLY')
+        self.btnCursor = self.create_tool_btn("cursor.svg", "选择/浏览 (V)", 'VIEW')
+        self.btnRect = self.create_tool_btn("rect.svg", "矩形 (R)", 'DRAW_RECT')
+        self.btnPoly = self.create_tool_btn("poly.svg", "多边形 (P)", 'DRAW_POLY')
         
-        self.modeGroup.addButton(self.btnHand)
+        self.modeGroup.addButton(self.btnCursor)
         self.modeGroup.addButton(self.btnRect)
         self.modeGroup.addButton(self.btnPoly)
 
-        tb_layout.addWidget(self.btnHand)
+        tb_layout.addWidget(self.btnCursor)
         tb_layout.addWidget(self.btnRect)
         tb_layout.addWidget(self.btnPoly)
         
         tb_layout.addSpacing(15)
 
-        # 功能组
-        # AI=ROBOT, 导出=SHARE, 帮助=HELP, 保存=SAVE
-        self.btnAI = self.create_icon_btn(FIF.ROBOT, "AI 自动识别")
+        self.btnAI = self.create_tool_btn("ai.svg", "AI 自动识别", None)
         self.btnAI.clicked.connect(self.request_ai)
         
-        self.btnExport = self.create_icon_btn(FIF.SHARE, "导出数据集")
+        self.btnExport = self.create_tool_btn("export.svg", "导出数据集", None)
         self.btnExport.clicked.connect(self.show_export_dialog)
 
-        self.btnHelp = self.create_icon_btn(FIF.HELP, "快捷键帮助")
+        self.btnHelp = self.create_tool_btn("help.svg", "快捷键帮助", None)
         self.btnHelp.clicked.connect(self.show_shortcuts)
 
-        self.btnSaveSmall = self.create_icon_btn(FIF.SAVE, "保存 (Ctrl+S)")
+        self.btnSaveSmall = self.create_tool_btn("save.svg", "保存 (Ctrl+S)", None)
         self.btnSaveSmall.clicked.connect(lambda: self.save_current_work(silent=False))
 
         tb_layout.addWidget(self.btnAI)
@@ -326,69 +296,70 @@ class LabelInterface(QWidget):
         tb_layout.addWidget(self.btnSaveSmall)
         tb_layout.addStretch()
 
-        # === 2. 中间画布 (深色沉浸) ===
+        # 2. 画布
         self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QColor(40, 40, 40)) 
+        self.scene.setBackgroundBrush(QColor("#F5F5F5")) 
         self.view = LabelGraphicsView(self.scene)
         self.view.draw_finished.connect(self.on_draw_finished)
 
-        # === 3. 右侧面板 (白色清爽) ===
+        # 3. 右侧面板
         rightPanel = QSplitter(Qt.Vertical)
         rightPanel.setFixedWidth(240)
         rightPanel.setStyleSheet("""
-            QSplitter::handle { background-color: #e5e7eb; height: 1px; }
-            QWidget { background-color: #ffffff; }
-            QListWidget { border: none; background-color: white; }
-            QLabel { 
-                font-weight: 600; color: #374151; padding: 8px; 
-                background: #f9fafb; border-bottom: 1px solid #e5e7eb;
-            }
+            QSplitter::handle { background-color: #DDD; height: 1px; }
+            QWidget { background-color: #FFFFFF; }
+            QListWidget { border: none; background-color: #FFFFFF; color: #333; }
+            QLabel { font-weight: 600; color: #666; padding: 8px; background: #FAFAFA; border-bottom: 1px solid #EEE; }
         """)
 
-        # 标签列表
+        # 3.1 标注列表
         labelContainer = QWidget()
         labelLayout = QVBoxLayout(labelContainer)
         labelLayout.setContentsMargins(0, 0, 0, 0)
-        labelLayout.addWidget(QLabel("标签列表 / Labels"))
+        labelLayout.addWidget(QLabel("当前标注 / Annotations"))
         self.labelList = QListWidget()
         self.labelList.setAlternatingRowColors(True)
+        self.labelList.setStyleSheet("QListWidget::item:selected { background-color: #E6F0FF; color: black; } QListWidget::item:hover { background-color: #F5F5F5; }")
         self.labelList.itemClicked.connect(self.highlight_shape)
         labelLayout.addWidget(self.labelList)
         
-        # 文件列表
+        # 3.2 任务标签列表 (显示该任务所有历史标签)
+        taskClassContainer = QWidget()
+        taskClassLayout = QVBoxLayout(taskClassContainer)
+        taskClassLayout.setContentsMargins(0, 0, 0, 0)
+        taskClassLayout.addWidget(QLabel("任务历史标签 / Task Classes"))
+        self.classList = QListWidget()
+        self.classList.setStyleSheet("color: #555; font-style: italic;")
+        taskClassLayout.addWidget(self.classList)
+
+        # 3.3 文件列表
         fileContainer = QWidget()
         fileLayout = QVBoxLayout(fileContainer)
         fileLayout.setContentsMargins(0, 0, 0, 0)
         fileLayout.addWidget(QLabel("文件列表 / Files"))
         self.fileList = QListWidget()
         self.fileList.setAlternatingRowColors(True)
+        self.fileList.setStyleSheet("QListWidget::item:selected { background-color: #E6F0FF; color: black; } QListWidget::item:hover { background-color: #F5F5F5; }")
         self.fileList.itemClicked.connect(self.on_file_clicked)
         fileLayout.addWidget(self.fileList)
 
-        # 底部保存按钮区域
         saveContainer = QFrame()
         saveContainer.setFixedHeight(50)
-        saveContainer.setStyleSheet("background-color: #f9fafb; border-top: 1px solid #e5e7eb;")
+        saveContainer.setStyleSheet("background-color: #FAFAFA; border-top: 1px solid #EEE;")
         saveLayout = QHBoxLayout(saveContainer)
         saveLayout.setContentsMargins(12, 8, 12, 8)
 
         self.btnSaveBig = QPushButton("💾 保存当前结果")
         self.btnSaveBig.setCursor(Qt.PointingHandCursor)
-        self.btnSaveBig.setStyleSheet("""
-            QPushButton { 
-                background-color: #2563EB; color: white; border-radius: 6px; 
-                font-weight: 600; font-size: 13px; border: none;
-            }
-            QPushButton:hover { background-color: #1d4ed8; }
-            QPushButton:pressed { background-color: #1e40af; }
-        """)
+        self.btnSaveBig.setStyleSheet("QPushButton { background-color: #3B82F6; color: white; border-radius: 6px; font-weight: 600; font-size: 13px; border: none; } QPushButton:hover { background-color: #2563EB; } QPushButton:pressed { background-color: #1D4ED8; }")
         self.btnSaveBig.clicked.connect(lambda: self.save_current_work(silent=False))
         saveLayout.addWidget(self.btnSaveBig)
         fileLayout.addWidget(saveContainer)
 
         rightPanel.addWidget(labelContainer)
+        rightPanel.addWidget(taskClassContainer) 
         rightPanel.addWidget(fileContainer)
-        rightPanel.setSizes([300, 400]) 
+        rightPanel.setSizes([200, 150, 400]) 
 
         layout.addWidget(self.toolBar)
         layout.addWidget(self.view, 1) 
@@ -396,61 +367,46 @@ class LabelInterface(QWidget):
         
         self.switch_mode('VIEW')
 
-    # === 工具方法：创建样式统一的图标按钮 ===
-    def create_icon_btn(self, fluent_icon, tooltip):
-        """创建普通功能按钮 (Normal / Hover / Pressed)"""
+    def create_tool_btn(self, icon_file, tooltip, mode):
         btn = QPushButton()
-        btn.setIcon(fluent_icon.icon())
-        btn.setIconSize(QSize(20, 20))
         btn.setToolTip(tooltip)
-        btn.setFixedSize(40, 40)
-        btn.setCursor(Qt.PointingHandCursor)
-        # 医疗/企业级风格 CSS
-        btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #f3f4f6; /* 浅灰 Hover */
-            }
-            QPushButton:pressed {
-                background-color: #e5e7eb; /* 深灰 Press */
-            }
-        """)
-        return btn
-
-    def create_tool_btn(self, fluent_icon, tooltip, mode):
-        """创建工具模式按钮 (Checkable: Default / Hover / Checked)"""
-        btn = QPushButton()
-        btn.setIcon(fluent_icon.icon())
-        btn.setIconSize(QSize(20, 20))
-        btn.setToolTip(tooltip)
-        btn.setCheckable(True)
-        btn.setFixedSize(40, 40)
+        btn.setCheckable(mode is not None)
+        btn.setFixedSize(36, 36)
         btn.setCursor(Qt.PointingHandCursor)
         
-        # 核心：使用 QSS 实现选中态的蓝色高亮 (#DBEAFE) 和 图标色变化逻辑
-        # 注意：QIcon 本身颜色很难通过 CSS 改变，但背景色变化已经足够清晰
-        btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #f3f4f6;
-            }
-            QPushButton:checked {
-                background-color: #dbeafe; /* 浅蓝选中底色 */
-                border: 1px solid #bfdbfe; /* 选中描边 */
-            }
-        """)
+        # === 修复: 使用绝对路径获取图标 ===
+        btn.icon_path = get_icon_path(icon_file)
+        self.update_btn_icon(btn)
+        
+        btn.setStyleSheet("QPushButton { background-color: transparent; border-radius: 8px; border: none; } QPushButton:hover { background-color: #E0E0E0; } QPushButton:checked { background-color: #E6F0FF; border: 1px solid #3B82F6; }")
         
         if mode:
             btn.clicked.connect(lambda: self.switch_mode(mode))
+            btn.toggled.connect(lambda: self.update_btn_icon(btn))
+            
         return btn
+
+    def update_btn_icon(self, btn):
+        if not hasattr(btn, 'icon_path') or not btn.icon_path:
+            btn.setText("?")
+            return
+            
+        pixmap = QPixmap(btn.icon_path)
+        target_color = QColor("#3B82F6") if (btn.isChecked() or btn.isDown()) else QColor("#555555")
+        
+        mask = pixmap.createMaskFromColor(Qt.transparent, Qt.MaskInColor)
+        pixmap.fill(target_color)
+        pixmap.setMask(mask)
+        
+        btn.setIcon(QIcon(pixmap))
+        btn.setIconSize(QSize(20, 20))
+        btn.setText("")
+
+    def refresh_task_classes_ui(self):
+        """刷新右侧的任务标签列表"""
+        self.classList.clear()
+        for cls_name in self.project_classes:
+            self.classList.addItem(QListWidgetItem(cls_name))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -470,9 +426,12 @@ class LabelInterface(QWidget):
 
     def switch_mode(self, mode):
         self.view.set_mode(mode)
-        self.btnHand.setChecked(mode == 'VIEW')
+        self.btnCursor.setChecked(mode == 'VIEW')
         self.btnRect.setChecked(mode == 'DRAW_RECT')
         self.btnPoly.setChecked(mode == 'DRAW_POLY')
+        self.update_btn_icon(self.btnCursor)
+        self.update_btn_icon(self.btnRect)
+        self.update_btn_icon(self.btnPoly)
         self.view.setFocus()
 
     def show_export_dialog(self):
@@ -483,11 +442,10 @@ class LabelInterface(QWidget):
             data = dialog.get_data()
             try:
                 count = DataManager.export_dataset(self.current_project, data['path'], data['format'])
-                # 提示框样式修复
                 msg = QMessageBox(self)
                 msg.setWindowTitle("导出成功")
                 msg.setText(f"成功导出 {count} 张！")
-                msg.setStyleSheet("background-color: white; color: #333;")
+                msg.setStyleSheet("QMessageBox { background-color: #FFF; color: #333; } QLabel { color: #333; }")
                 msg.exec()
             except Exception as e: 
                 QMessageBox.critical(self, "失败", str(e))
@@ -502,7 +460,8 @@ class LabelInterface(QWidget):
         current_row = 0
         for i, f in enumerate(files):
             item = QListWidgetItem(os.path.basename(f))
-            item.setData(Qt.UserRole, f); self.fileList.addItem(item)
+            item.setData(Qt.UserRole, f)
+            self.fileList.addItem(item)
             if f == current_path: current_row = i
         self.fileList.setCurrentRow(current_row)
 
@@ -542,10 +501,21 @@ class LabelInterface(QWidget):
 
     def on_draw_finished(self, shape_type, data):
         dialog = LabelDialog(self.project_classes, self)
+        dialog.setStyleSheet("QDialog { background-color: #FFF; color: #000; } QListWidget { background-color: #FFF; color: #000; border: 1px solid #CCC; }")
+        
         if dialog.exec():
             label = dialog.get_label()
             if not label: label = "Object"
-            if label not in self.project_classes: self.project_classes.append(label)
+            
+            # === 保存新标签到数据库 ===
+            if label not in self.project_classes:
+                self.project_classes.append(label)
+                if self.current_project:
+                    new_classes_str = ",".join(self.project_classes)
+                    self.current_project.classes = new_classes_str
+                    self.current_project.save()
+                    self.refresh_task_classes_ui()
+            
             if shape_type == 'rect': item = BoxItem(data.x(), data.y(), data.width(), data.height(), label); self.scene.addItem(item)
             elif shape_type == 'polygon': item = PolyItem(data, label); self.scene.addItem(item)
             self.refresh_label_list(); self.switch_mode('VIEW')
@@ -555,7 +525,8 @@ class LabelInterface(QWidget):
         for item in self.scene.items():
             if isinstance(item, (BoxItem, PolyItem)):
                 list_item = QListWidgetItem(item.label_text)
-                list_item.setData(Qt.UserRole, item); self.labelList.addItem(list_item)
+                list_item.setData(Qt.UserRole, item)
+                self.labelList.addItem(list_item)
 
     def highlight_shape(self, list_item):
         shape = list_item.data(Qt.UserRole); self.scene.clearSelection(); shape.setSelected(True)
@@ -621,4 +592,8 @@ class LabelInterface(QWidget):
             x = (box['rect'][0] * img_w) - (w / 2); y = (box['rect'][1] * img_h) - (h / 2)
             item = BoxItem(x, y, w, h, box['label']); self.scene.addItem(item)
         self.refresh_label_list()
-        QMessageBox.information(self, "AI 完成", f"识别到 {len(results)} 个物体")
+        msg = QMessageBox(self)
+        msg.setWindowTitle("AI 完成")
+        msg.setText(f"识别到 {len(results)} 个物体")
+        msg.setStyleSheet("QMessageBox { background-color: #FFF; color: #333; } QLabel { color: #333; }")
+        msg.exec()

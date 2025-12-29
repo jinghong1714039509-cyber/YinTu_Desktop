@@ -1,10 +1,10 @@
+import sys
 import os
-from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                                QStackedWidget, QMessageBox, QProgressDialog, QGraphicsDropShadowEffect)
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QGuiApplication
 
-# 导入组件
 from app.ui.components.sidebar import Sidebar
 from app.ui.components.header import Header
 from app.ui.views.home_interface import HomeInterface
@@ -19,56 +19,103 @@ from app.models.schema import MediaItem
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YinTu Desktop")
-        self.resize(1280, 800)
-        
+        self.setWindowTitle("YinTu Desktop Pro")
+        self.resize(1360, 800)
         self.center_window()
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
+        # === 修复重点：全局亮色主题 + 强制修复弹窗黑屏 ===
+        self.setStyleSheet("""
+            /* 全局背景设为白色 */
+            QMainWindow, QWidget#CentralWidget {
+                background-color: #FFFFFF; 
+                border-radius: 12px;
+                border: 1px solid #CCCCCC;
+            }
+            /* 所有 Label 默认深色字 */
+            QLabel { color: #333333; font-family: 'Microsoft YaHei', 'Segoe UI'; }
+            
+            /* === 核心修复：防止弹窗(QDialog)黑屏 === */
+            QDialog {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 1px solid #CCC;
+            }
+            /* 修复输入框看不见字 */
+            QLineEdit {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 1px solid #CCC;
+                padding: 5px;
+                border-radius: 4px;
+            }
+            /* 修复列表背景和选中色 */
+            QListWidget {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 1px solid #DDD;
+                outline: none;
+            }
+            QListWidget::item { padding: 5px; }
+            QListWidget::item:selected {
+                background-color: #3B82F6; /* 选中变蓝 */
+                color: #FFFFFF;
+            }
+            QListWidget::item:hover {
+                background-color: #F0F0F0;
+                color: #000000;
+            }
+            /* 修复按钮样式 */
+            QPushButton {
+                background-color: #F0F0F0;
+                color: #333;
+                border: 1px solid #CCC;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover { background-color: #E0E0E0; }
+            QPushButton:pressed { background-color: #D0D0D0; }
+        """)
+
         # 核心容器
         self.central_widget = QWidget()
         self.central_widget.setObjectName("CentralWidget")
-        self.central_widget.setStyleSheet("""
-            #CentralWidget {
-                background-color: #f4f6f9;
-                border-radius: 12px; 
-                border: 1px solid #dcdcdc;
-            }
-        """)
         self.setCentralWidget(self.central_widget)
         
-        # 阴影
+        # 阴影变浅
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
+        shadow.setBlurRadius(24)
         shadow.setXOffset(0)
-        shadow.setYOffset(0)
-        shadow.setColor(QColor(0, 0, 0, 60))
+        shadow.setYOffset(8)
+        shadow.setColor(QColor(0, 0, 0, 40)) 
         self.central_widget.setGraphicsEffect(shadow)
 
         self.main_layout = QHBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
-        # 左侧：侧边栏
+        # 左侧边栏
         self.sidebar = Sidebar()
         self.sidebar.page_changed.connect(self.switch_page)
         self.main_layout.addWidget(self.sidebar)
 
-        # 右侧：内容区域
+        # 右侧内容区
         self.content_container = QWidget()
-        # 关键：给右侧容器也设置圆角，防止直角溢出
-        self.content_container.setStyleSheet("""
-            border-top-right-radius: 12px;
-            border-bottom-right-radius: 12px;
-            background-color: transparent;
-        """) 
+        # 右侧背景微灰，区分层次
+        self.content_container.setStyleSheet("background-color: #FAFAFA; border-top-right-radius: 12px; border-bottom-right-radius: 12px;")
         self.content_layout = QVBoxLayout(self.content_container)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(0)
 
-        # 顶部 Header
+        # Header 样式适配白色
         self.header = Header()
+        self.header.setStyleSheet("""
+            QFrame { background-color: transparent; border-bottom: 1px solid #E0E0E0; }
+            QLabel { color: #333; font-weight: bold; }
+            QPushButton { color: #666; border: none; background: transparent; }
+            QPushButton:hover { background-color: #E0E0E0; color: #000; }
+        """)
         self.header.close_clicked.connect(self.close)
         self.header.min_clicked.connect(self.showMinimized)
         self.header.max_clicked.connect(self.toggle_maximize)
@@ -89,7 +136,6 @@ class MainWindow(QMainWindow):
         self.content_layout.addWidget(self.stack)
         self.main_layout.addWidget(self.content_container)
 
-        # --- 信号连接 ---
         self.task_list_interface.new_project_signal.connect(self.start_import)
         self.task_list_interface.project_selected.connect(self.enter_labeling_mode)
         self.label_interface.request_ai_signal.connect(self.run_ai)
@@ -98,7 +144,6 @@ class MainWindow(QMainWindow):
         self.worker = None      
         self.current_project = None
         self.click_pos = None   
-
         self.ai_worker = AiWorker()
         self.ai_worker.finished_signal.connect(self.on_ai_finished)
         self.ai_worker.error_signal.connect(self.on_ai_error)
@@ -109,26 +154,21 @@ class MainWindow(QMainWindow):
     def center_window(self):
         screen = QGuiApplication.primaryScreen().availableGeometry()
         size = self.geometry()
-        self.move((screen.width() - size.width()) // 2, 
-                  (screen.height() - size.height()) // 2)
+        self.move((screen.width() - size.width()) // 2, (screen.height() - size.height()) // 2)
 
     def toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
+        if self.isMaximized(): self.showNormal()
+        else: self.showMaximized()
 
     def switch_page(self, page_name):
-        if page_name == "tasks":
-            self.return_to_tasks()
+        if page_name == "tasks": self.return_to_tasks()
 
     def return_to_tasks(self):
         self.stack.setCurrentIndex(1)
         self.task_list_interface.refresh_data()
 
     def pressWindow(self, event):
-        if event.button() == Qt.LeftButton:
-            self.click_pos = event.globalPos()
+        if event.button() == Qt.LeftButton: self.click_pos = event.globalPos()
 
     def moveWindow(self, event):
         if self.click_pos and not self.isMaximized():
@@ -138,31 +178,15 @@ class MainWindow(QMainWindow):
 
     def start_import(self, config_data):
         path = config_data['folder']
-        project, videos, img_count = DataManager.import_folder(
-            path, 
-            model_path=config_data['model'],
-            class_list_str=config_data['classes']
-        )
-        
-        # 这里的检查之前加过了，如果没有文件会直接弹窗警告并删除项目
-        # import_folder 方法里已经处理了，这里我们只需要处理成功的情况
+        project, videos, img_count = DataManager.import_folder(path, model_path=config_data['model'], class_list_str=config_data['classes'])
         if img_count == 0 and len(videos) == 0:
-             # 如果是空项目，DataManager 其实创建了项目
-             # 我们在这里做二次校验
              QMessageBox.warning(self, "警告", "目录中未找到支持的图片或视频文件！")
-             project.delete_instance()
-             return
-
+             project.delete_instance(); return
         if config_data.get('name'):
-            project.name = config_data['name']
-            project.save()
-
+            project.name = config_data['name']; project.save()
         self.current_project = project
-
-        if videos:
-            self.process_videos(videos)
-        else:
-            self.on_import_finished()
+        if videos: self.process_videos(videos)
+        else: self.on_import_finished()
 
     def process_videos(self, videos):
         video_path = videos[0]
@@ -170,7 +194,6 @@ class MainWindow(QMainWindow):
         self.progress_dialog.setWindowModality(Qt.WindowModal)
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.show()
-
         output_dir = os.path.join(DATA_DIR, "frames")
         self.worker = VideoExtractWorker(video_path, output_dir, fps=1)
         self.worker.progress_signal.connect(self.progress_dialog.setValue)
@@ -189,53 +212,30 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "成功", "任务创建成功！")
 
     def enter_labeling_mode(self, project_obj):
-        """进入标注模式（核心修改：先检查文件，没文件不跳转）"""
-        print(f"进入项目: {project_obj.name}")
         self.current_project = project_obj
-        
-        # 查询文件
-        items = MediaItem.select().where(
-            MediaItem.project == self.current_project
-        ).order_by(MediaItem.file_path)
-
+        items = MediaItem.select().where(MediaItem.project == self.current_project).order_by(MediaItem.file_path)
         all_files = [item.file_path for item in items]
-        
-        # === 修改点：如果没有文件，弹出白底警告，并且不切换页面 ===
         if not all_files:
-            self.show_white_msgbox("提示", "该任务下没有找到可显示的图片")
-            # 保持在 Index 1 (任务列表)，不要切到 Index 2
+            QMessageBox.information(self, "提示", "没有图片")
             return
-
-        # 如果有文件，才切换界面
         self.ai_worker.update_config(project_obj.model_path, project_obj.classes)
-        self.stack.setCurrentIndex(2) # 切换到标注页
+        self.stack.setCurrentIndex(2)
+        
+        # === 关键：传递 Project 对象，确保能加载和保存历史标签 ===
         self.label_interface.set_project(project_obj)
         
         target_path = all_files[0]
         for item in items:
-            if not item.is_labeled:
-                target_path = item.file_path
-                break
+            if not item.is_labeled: target_path = item.file_path; break
         self.label_interface.load_file_list(all_files, target_path)
         self.label_interface.load_image(target_path)
 
-    # 辅助方法：显示白色背景的提示框 (解决黑屏问题)
-    def show_white_msgbox(self, title, content):
-        msg = QMessageBox(self)
-        msg.setWindowTitle(title)
-        msg.setText(content)
-        msg.setStyleSheet("QMessageBox { background-color: white; color: #333; } QLabel { color: #333; }")
-        msg.exec()
-
     def run_ai(self, image_path):
         if not self.ai_worker.isRunning():
-            self.ai_worker.set_image(image_path)
-            self.ai_worker.start()
+            self.ai_worker.set_image(image_path); self.ai_worker.start()
     
     def on_ai_finished(self, image_path, results):
         self.label_interface.apply_ai_results(results)
 
     def on_ai_error(self, err_msg):
-        self.label_interface.btnAI.setText("🤖")
-        self.label_interface.btnAI.setEnabled(True)
         QMessageBox.critical(self, "AI 错误", f"识别失败: {err_msg}")
