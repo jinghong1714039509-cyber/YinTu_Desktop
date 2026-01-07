@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                                QGraphicsPathItem, QGraphicsItem, QFrame, QMessageBox,
                                QListWidget, QListWidgetItem, QGraphicsLineItem, QGraphicsEllipseItem,
                                QSplitter, QButtonGroup, QGraphicsTextItem, QDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStyle, QScrollArea, QGraphicsDropShadowEffect)
+                               QStyle, QScrollArea, QGraphicsDropShadowEffect, QApplication)
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QSize
-from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush, QPolygonF, QPainterPath, QFont, QAction, QKeySequence, QIcon
+from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush, QPolygonF, QPainterPath, QFont, QAction, QKeySequence, QIcon, QShortcut
 from PySide6.QtGui import QCursor
 from PySide6.QtSvg import QSvgRenderer
 
@@ -162,17 +162,73 @@ class ImageViewer(QGraphicsView):
         self.poly_points = []
         self.temp_path_item = None
         self.snap_threshold = 12
+        self.poly_hover_pos = None
+        # 缓存 VIEW 模式自定义光标（cursor.svg）
+        self._cursor_view = render_svg_cursor("cursor.svg", size=24, hotspot_x=1, hotspot_y=1)
+        # 初始化为 VIEW 时的悬停光标
+        self.viewport().setCursor(self._cursor_view)
+
 
     def set_mode(self, mode: str):
         self.mode = mode
         self.rect_start = None
+
+        sc = self.scene()
+
+        def _safe_remove(item):
+            if not item or sc is None:
+                return
+            try:
+                sc.removeItem(item)
+            except RuntimeError:
+                # 可能已被 Qt (C++) 释放/scene.clear 清空
+                pass
+
+        # 清理临时矩形
         if self.temp_rect_item:
-            self.scene().removeItem(self.temp_rect_item)
+            _safe_remove(self.temp_rect_item)
             self.temp_rect_item = None
+
+        # 清理临时多边形路径
         if self.temp_path_item:
-            self.scene().removeItem(self.temp_path_item)
+            _safe_remove(self.temp_path_item)
             self.temp_path_item = None
+
         self.poly_points.clear()
+        self.poly_hover_pos = None
+
+        # === 根据模式设置拖拽与光标 ===
+        if mode == "VIEW":
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().setCursor(self._cursor_view)      # 悬停光标：cursor.svg
+        else:
+            self.setDragMode(QGraphicsView.NoDrag)
+            self.viewport().setCursor(Qt.CrossCursor)         # 绘制光标：十字准星
+
+        # 仅在 VIEW 允许鼠标与标注交互（拖动/点选）；绘制模式下禁止，避免误拖动重叠标注
+        self._apply_annotation_interaction()
+
+
+    def _apply_annotation_interaction(self):
+        """Enable mouse interaction (move/click) for existing annotations only in VIEW mode.
+
+        In drawing modes, annotations stay selectable programmatically (e.g. from the right list),
+        but they do not accept mouse events and cannot be moved, preventing accidental dragging when
+        annotations overlap.
+        """
+        sc = self.scene()
+        if sc is None:
+            return
+
+        movable = (self.mode == "VIEW")
+        for item in sc.items():
+            if isinstance(item, (RectShape, PolyShape)):
+                # Always keep selectable so list-driven selection/highlight still works
+                item.setFlag(QGraphicsItem.ItemIsSelectable, True)
+                item.setFlag(QGraphicsItem.ItemIsMovable, movable)
+                item.setAcceptedMouseButtons(Qt.LeftButton if movable else Qt.NoButton)
+                if not movable:
+                    item.setSelected(False)
 
     def wheelEvent(self, event: QWheelEvent):
         zoom_in_factor = 1.15
@@ -182,65 +238,189 @@ class ImageViewer(QGraphicsView):
         else:
             self.scale(zoom_out_factor, zoom_out_factor)
 
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        # 进入画布时，确保光标与当前模式一致（避免 ScrollHandDrag 默认手型覆盖）
+        if self.mode == "VIEW":
+            self.viewport().setCursor(self._cursor_view)
+        else:
+            self.viewport().setCursor(Qt.CrossCursor)
+
+    # === 限制标注在图片范围内（sceneRect 即图片区域） ===
+    def _image_rect(self) -> QRectF:
+        sc = self.scene()
+        return sc.sceneRect() if sc else QRectF()
+
+    def _in_image(self, p: QPointF) -> bool:
+        r = self._image_rect()
+        return (not r.isNull()) and r.contains(p)
+
+    def _clamp_to_image(self, p: QPointF) -> QPointF:
+        r = self._image_rect()
+        if r.isNull():
+            return p
+        x = min(max(p.x(), r.left()), r.right())
+        y = min(max(p.y(), r.top()), r.bottom())
+        return QPointF(x, y)
+
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
 
         pos = self.mapToScene(event.pos())
-        self.pointClicked.emit(pos)
+
+        # VIEW：允许拖拽/选择；并发出点击信号（保持原行为）
+        if self.mode == "VIEW":
+            self.pointClicked.emit(pos)
+            super().mousePressEvent(event)
+            return
+
+        # 未加载图片时，sceneRect 可能为空；绘制直接忽略
+        if self._image_rect().isNull():
+            return
 
         if self.mode == "DRAW_RECT":
             if self.rect_start is None:
+                # 起点必须在图片内
+                if not self._in_image(pos):
+                    return
+                pos = self._clamp_to_image(pos)
+                self.pointClicked.emit(pos)
+
                 self.rect_start = pos
                 self.temp_rect_item = QGraphicsRectItem(QRectF(pos, pos))
                 self.temp_rect_item.setPen(QPen(QColor("#3B82F6"), 2))
                 self.temp_rect_item.setBrush(QBrush(QColor(59, 130, 246, 30)))
                 self.scene().addItem(self.temp_rect_item)
             else:
+                # 终点 clamp 到图片边界，确保矩形不越界
+                pos = self._clamp_to_image(pos)
+                self.pointClicked.emit(pos)
+
                 rect = QRectF(self.rect_start, pos).normalized()
                 if self.temp_rect_item:
                     self.scene().removeItem(self.temp_rect_item)
                     self.temp_rect_item = None
                 self.rect_start = None
                 self.draw_finished.emit("rect", rect)
+            event.accept()
+            return
 
-        elif self.mode == "DRAW_POLY":
+        if self.mode == "DRAW_POLY":
+            # 每个点必须在图片内
+            if not self._in_image(pos):
+                return
+            pos = self._clamp_to_image(pos)
+            self.pointClicked.emit(pos)
+
             if self.is_close_to_start(pos) and len(self.poly_points) >= 3:
                 # 闭合
                 self.draw_finished.emit("poly", list(self.poly_points))
                 self.clear_poly_temp()
             else:
                 self.poly_points.append(pos)
-                self.update_temp_path()
+                # 立即刷新一次 hover 预览，避免用户不移动鼠标时看不到反馈
+                self.poly_hover_pos = pos
+                self.update_temp_path(self.poly_hover_pos)
+            event.accept()
+            return
 
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        pos = self.mapToScene(event.pos())
+
+        # VIEW 模式：鼠标悬停时强制使用 cursor.svg（避免拖拽模式变成手型）
+        if self.mode == "VIEW" and event.buttons() == Qt.NoButton:
+            self.viewport().setCursor(self._cursor_view)
+
+        # 未加载图片时，不做绘制预览
+        if self._image_rect().isNull():
+            super().mouseMoveEvent(event)
+            return
+
+        # 矩形拖拽预览（终点 clamp 到图片边界）
         if self.mode == "DRAW_RECT" and self.rect_start is not None and self.temp_rect_item:
-            pos = self.mapToScene(event.pos())
+            pos = self._clamp_to_image(pos)
             rect = QRectF(self.rect_start, pos).normalized()
             self.temp_rect_item.setRect(rect)
 
+        # 多边形预览：最后一点 -> 鼠标（hover 也 clamp 到图片边界）
+        elif self.mode == "DRAW_POLY" and self.poly_points:
+            pos = self._clamp_to_image(pos)
+            if self.is_close_to_start(pos) and len(self.poly_points) >= 3:
+                hover_pos = self.poly_points[0]
+            else:
+                hover_pos = pos
+            self.poly_hover_pos = hover_pos
+            self.update_temp_path(hover_pos)
+        if self.mode != "VIEW":
+            event.accept()
+            return
+
         super().mouseMoveEvent(event)
 
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.mode == "VIEW":
+            # 拖拽结束后，强制恢复为 cursor.svg 悬停光标
+            self.viewport().setCursor(self._cursor_view)
+
+
     def clear_poly_temp(self):
+        """清理多边形临时绘制状态（不影响已提交的标注）。"""
+        sc = self.scene()
         if self.temp_path_item:
-            self.scene().removeItem(self.temp_path_item)
+            try:
+                if sc:
+                    sc.removeItem(self.temp_path_item)
+            except RuntimeError:
+                # 可能已被 Qt (C++) 释放
+                pass
             self.temp_path_item = None
         self.poly_points.clear()
+        self.poly_hover_pos = None
 
-    def update_temp_path(self):
+    def update_temp_path(self, hover_pos=None):
+        """更新多边形临时路径；hover_pos 用于绘制最后一点到鼠标的预览线。
+        修复：避免引用已被 Qt 删除的 QGraphicsPathItem（Internal C++ object already deleted）。
+        """
+        sc = self.scene()
+        if sc is None:
+            return
+
+        # 若临时 item 已失效/脱离 scene，丢弃引用并重建
+        if self.temp_path_item is not None:
+            try:
+                if self.temp_path_item.scene() is None or self.temp_path_item.scene() is not sc:
+                    self.temp_path_item = None
+            except RuntimeError:
+                self.temp_path_item = None
+
         if self.temp_path_item is None:
             self.temp_path_item = QGraphicsPathItem()
             self.temp_path_item.setPen(QPen(Qt.red, 2))
-            self.scene().addItem(self.temp_path_item)
+            sc.addItem(self.temp_path_item)
+
         path = QPainterPath()
         if self.poly_points:
             path.moveTo(self.poly_points[0])
             for p in self.poly_points[1:]:
                 path.lineTo(p)
-        self.temp_path_item.setPath(path)
+            if hover_pos is not None:
+                path.lineTo(hover_pos)
+
+        try:
+            self.temp_path_item.setPath(path)
+        except RuntimeError:
+            # 极端情况下 setPath 前 item 又被释放，重建再试一次
+            self.temp_path_item = QGraphicsPathItem()
+            self.temp_path_item.setPen(QPen(Qt.red, 2))
+            sc.addItem(self.temp_path_item)
+            self.temp_path_item.setPath(path)
 
     def is_close_to_start(self, pos):
         if not self.poly_points:
@@ -296,6 +476,11 @@ class LabelInterface(QWidget):
         self.selected_shape_item = None
 
         self.initUI()
+
+        # 画布选中项 <-> 右侧列表联动
+        self._syncing_selection = False
+        self.scene.selectionChanged.connect(self.on_scene_selection_changed)
+
         self.initShortcuts()
 
     def set_project(self, project_obj):
@@ -517,16 +702,23 @@ class LabelInterface(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+
+        # 进入标注界面时，主窗口默认最大化（更接近“初始全屏”的体验）
+        if not getattr(self, "_did_request_maximize", False):
+            self._did_request_maximize = True
+            try:
+                w = self.window()
+                if w is not None:
+                    w.showMaximized()
+            except Exception:
+                pass
+
         self.setFocus()
         self.activateWindow()
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_A:
-            self.prev_image()
-        elif key == Qt.Key_D:
-            self.next_image()
-        elif key == Qt.Key_V:
+        if key == Qt.Key_V:
             self.switch_mode("VIEW")
         elif key == Qt.Key_R:
             self.switch_mode("DRAW_RECT")
@@ -536,16 +728,38 @@ class LabelInterface(QWidget):
             self.save_current_work(silent=False)
         elif key == Qt.Key_Z and (event.modifiers() & Qt.ControlModifier):
             self.undo_last_action()
-        elif key == Qt.Key_Delete:
-            self.delete_selected_shape()
+        elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+            self.delete_selected_shapes()
         elif key == Qt.Key_Escape:
             if self.view.mode == "DRAW_POLY":
                 self.view.clear_poly_temp()
         super().keyPressEvent(event)
 
+
     def initShortcuts(self):
-        # 原版保留：快捷键主要在 keyPressEvent 中处理
-        pass
+        """A/D 切图使用 QShortcut，确保焦点在画布/列表时也可用。"""
+        def _modal_open() -> bool:
+            return QApplication.activeModalWidget() is not None
+
+        sc_prev = QShortcut(QKeySequence("A"), self)
+        sc_prev.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_prev.activated.connect(lambda: None if _modal_open() else self.prev_image())
+
+        sc_next = QShortcut(QKeySequence("D"), self)
+        sc_next.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_next.activated.connect(lambda: None if _modal_open() else self.next_image())
+
+        sc_delete = QShortcut(QKeySequence("Delete"), self)
+        sc_delete.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_delete.activated.connect(lambda: None if _modal_open() else self.delete_selected_shapes())
+
+        sc_backspace = QShortcut(QKeySequence("Backspace"), self)
+        sc_backspace.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_backspace.activated.connect(lambda: None if _modal_open() else self.delete_selected_shapes())
+
+        # 防止被垃圾回收
+        self._shortcuts = [sc_prev, sc_next, sc_delete, sc_backspace]
+
 
     def show_shortcuts(self):
         dlg = ShortcutDialog(self)
@@ -585,6 +799,7 @@ class LabelInterface(QWidget):
                 item = RectShape(rect, label)
                 self.scene.addItem(item)
                 self.annotations.append(item)
+                self.view._apply_annotation_interaction()
                 self.refresh_label_list()
 
             elif shape_type == "poly":
@@ -592,36 +807,146 @@ class LabelInterface(QWidget):
                 item = PolyShape(points, label)
                 self.scene.addItem(item)
                 self.annotations.append(item)
+                self.view._apply_annotation_interaction()
                 self.refresh_label_list()
 
-            self.switch_mode('VIEW')
+            self.view.setFocus()
+
 
     def refresh_label_list(self):
-        self.labelList.clear()
-        for it in self.annotations:
-            self.labelList.addItem(QListWidgetItem(it.label))
+        """Rebuild the right-side annotation list and keep selection in sync."""
+        current = self.selected_shape_item
+        self._syncing_selection = True
+        try:
+            self.labelList.clear()
+            for it in self.annotations:
+                self.labelList.addItem(QListWidgetItem(it.label))
+
+            # Restore selection if possible
+            if current is not None and current in self.annotations:
+                idx = self.annotations.index(current)
+                self.labelList.setCurrentRow(idx)
+                if self.labelList.item(idx):
+                    self.labelList.item(idx).setSelected(True)
+        finally:
+            self._syncing_selection = False
+
+    def on_scene_selection_changed(self):
+        """Sync canvas selection -> right list selection (VIEW mode)."""
+        if getattr(self, "_syncing_selection", False):
+            return
+        if not hasattr(self, "labelList"):
+            return
+
+        items = [it for it in self.scene.selectedItems() if isinstance(it, (RectShape, PolyShape))]
+        if not items:
+            self.selected_shape_item = None
+            self._syncing_selection = True
+            try:
+                self.labelList.clearSelection()
+            finally:
+                self._syncing_selection = False
+            return
+
+        # Prefer the first selected item
+        shp = items[0]
+        self.selected_shape_item = shp
+
+        try:
+            idx = self.annotations.index(shp)
+        except ValueError:
+            return
+
+        self._syncing_selection = True
+        try:
+            self.labelList.setCurrentRow(idx)
+            if self.labelList.item(idx):
+                self.labelList.item(idx).setSelected(True)
+        finally:
+            self._syncing_selection = False
 
     def highlight_shape(self, item):
+        """Right list click -> select/highlight the corresponding shape on canvas."""
+        if getattr(self, "_syncing_selection", False):
+            return
         idx = self.labelList.row(item)
         if idx < 0 or idx >= len(self.annotations):
             return
+
         shp = self.annotations[idx]
-        shp.setSelected(True)
-        self.selected_shape_item = shp
+        self._syncing_selection = True
+        try:
+            self.scene.clearSelection()
+            shp.setSelected(True)
+            self.selected_shape_item = shp
+        finally:
+            self._syncing_selection = False
+
         self.view.centerOn(shp)
 
-    def delete_selected_shape(self):
-        if self.selected_shape_item:
+    def delete_selected_shapes(self):
+        """Delete selected annotations.
+
+        Supported selection sources:
+          1) Selected rows in the right annotation list
+          2) Selected shapes on canvas (VIEW mode)
+        Also supports legacy self.selected_shape_item.
+        """
+        to_delete = []
+
+        # From right list selection
+        try:
+            for mi in self.labelList.selectedIndexes():
+                r = mi.row()
+                if 0 <= r < len(self.annotations):
+                    to_delete.append(self.annotations[r])
+        except Exception:
+            pass
+
+        # From canvas selection
+        try:
+            for it in self.scene.selectedItems():
+                if isinstance(it, (RectShape, PolyShape)):
+                    to_delete.append(it)
+        except Exception:
+            pass
+
+        # Fallback
+        if not to_delete and self.selected_shape_item is not None:
+            to_delete.append(self.selected_shape_item)
+
+        # Deduplicate while preserving order
+        seen = set()
+        uniq = []
+        for it in to_delete:
+            if id(it) not in seen:
+                seen.add(id(it))
+                uniq.append(it)
+
+        if not uniq:
+            return
+
+        for it in uniq:
             try:
-                self.scene.removeItem(self.selected_shape_item)
+                self.scene.removeItem(it)
             except Exception:
                 pass
-            if self.selected_shape_item in self.annotations:
-                self.annotations.remove(self.selected_shape_item)
-            self.selected_shape_item = None
-            self.refresh_label_list()
+            try:
+                if it in self.annotations:
+                    self.annotations.remove(it)
+            except Exception:
+                pass
+
+        self.scene.clearSelection()
+        self.selected_shape_item = None
+        self.refresh_label_list()
+
+    def delete_selected_shape(self):
+        """Backward-compatible wrapper."""
+        self.delete_selected_shapes()
 
     def undo_last_action(self):
+
         if self.view.mode == "DRAW_POLY" and self.view.poly_points:
             self.view.clear_poly_temp()
             return
@@ -638,7 +963,25 @@ class LabelInterface(QWidget):
         self.current_image_path = image_path
         self.lblFile.setText(image_path or "未选择")
 
+        # 清空 scene（会在 C++ 层销毁所有 items）
         self.scene.clear()
+
+        # 同步清理 view 里可能残留的临时 item 引用，避免后续 update_temp_path/setPath 触发 “已删除对象”
+        try:
+            self.view.temp_rect_item = None
+            self.view.temp_path_item = None
+            self.view.rect_start = None
+            self.view.poly_points.clear()
+            self.view.poly_hover_pos = None
+        except Exception:
+            pass
+
+        # 保持当前工具不变，但重新应用拖拽/光标设置
+        try:
+            self.view.set_mode(self.view.mode)
+        except Exception:
+            pass
+
         self.image_item = None
         self.annotations = []
         self.selected_shape_item = None
@@ -658,6 +1001,7 @@ class LabelInterface(QWidget):
 
         # 从数据库加载标注（原版逻辑）
         self.load_annotations_from_db()
+        self.view._apply_annotation_interaction()
         self.refresh_label_list()
 
     def load_annotations_from_db(self):
@@ -723,7 +1067,17 @@ class LabelInterface(QWidget):
             elif isinstance(it, PolyShape):
                 poly = it.polygon()
                 pts = [(float(poly[i].x()) / img_w, float(poly[i].y()) / img_h) for i in range(poly.count())]
-                box_data.append({"shape_type": "poly", "label": it.label, "points": json.dumps(pts)})
+                br = poly.boundingRect()
+                cx = br.center().x() / img_w
+                cy = br.center().y() / img_h
+                w = br.width() / img_w
+                h = br.height() / img_h
+                box_data.append({
+                    "shape_type": "poly",
+                    "label": it.label,
+                    "rect": [cx, cy, w, h],
+                    "points": json.dumps(pts)
+                })
 
         ok = DataManager.save_annotations(self.current_image_path, box_data)
 
