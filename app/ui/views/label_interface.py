@@ -146,6 +146,7 @@ class ShortcutDialog(QDialog):
 class ImageViewer(QGraphicsView):
     pointClicked = Signal(QPointF)
     draw_finished = Signal(str, object)
+    undoRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -265,6 +266,48 @@ class ImageViewer(QGraphicsView):
         return QPointF(x, y)
 
     def mousePressEvent(self, event):
+        # 右键撤销：仅在绘制模式拦截（避免影响 VIEW 模式右键行为/未来右键菜单）
+        if event.button() == Qt.RightButton:
+            if self.mode == "DRAW_POLY":
+                # 多边形绘制中：优先回退最后一个点（比直接清空更符合直觉）
+                if self.poly_points:
+                    self.poly_points.pop()
+                    if not self.poly_points:
+                        # 没有点了，清理临时状态
+                        self.clear_poly_temp()
+                    else:
+                        # 刷新预览线到当前鼠标位置（并限制在图片内）
+                        pos = self._clamp_to_image(self.mapToScene(event.pos()))
+                        self.poly_hover_pos = pos
+                        self.update_temp_path(pos)
+                    event.accept()
+                    return
+                # 没有点：视为撤销上一条已完成标注
+                self.undoRequested.emit()
+                event.accept()
+                return
+
+            if self.mode == "DRAW_RECT":
+                # 矩形绘制中：若已点击起点，则取消本次矩形绘制；否则撤销上一条标注
+                if self.rect_start is not None:
+                    sc = self.scene()
+                    if self.temp_rect_item and sc is not None:
+                        try:
+                            sc.removeItem(self.temp_rect_item)
+                        except RuntimeError:
+                            pass
+                    self.temp_rect_item = None
+                    self.rect_start = None
+                    event.accept()
+                    return
+                self.undoRequested.emit()
+                event.accept()
+                return
+
+            # VIEW 模式不拦截右键
+            super().mousePressEvent(event)
+            return
+
         if event.button() != Qt.LeftButton:
             super().mousePressEvent(event)
             return
@@ -471,6 +514,8 @@ class LabelInterface(QWidget):
         self.view.pointClicked.connect(self.on_canvas_clicked)
         self.view.draw_finished.connect(self.on_draw_finished)
 
+        self.view.undoRequested.connect(self.undo_last_action)
+
         self.image_item = None
         self.annotations = []
         self.selected_shape_item = None
@@ -493,10 +538,61 @@ class LabelInterface(QWidget):
 
     def load_file_list(self, all_files, target_path):
         self.all_files = all_files or []
+        # 更新右下角文件夹内容列表（基于目标文件所在目录）
+        try:
+            self.update_file_info_list(os.path.dirname(target_path) if target_path else "")
+        except Exception:
+            pass
         try:
             self.current_index = self.all_files.index(target_path)
         except Exception:
             self.current_index = -1
+
+    def update_file_info_list(self, folder_path: str):
+        """更新右下角『文件信息』：显示指定文件夹内的文件列表（仅第一层）。"""
+        if not hasattr(self, "fileListInfo"):
+            return
+
+        self.fileListInfo.clear()
+
+        if not folder_path or (not os.path.isdir(folder_path)):
+            if hasattr(self, "lblFolder"):
+                self.lblFolder.setText("文件夹：未选择")
+            if hasattr(self, "lblFileCount"):
+                self.lblFileCount.setText("")
+            return
+
+        if hasattr(self, "lblFolder"):
+            self.lblFolder.setText(f"文件夹：{folder_path}")
+
+        try:
+            files = [f for f in os.listdir(folder_path)
+                     if os.path.isfile(os.path.join(folder_path, f))]
+            files.sort(key=lambda s: s.lower())
+        except Exception:
+            files = []
+
+        max_show = 200
+        shown = files[:max_show]
+
+        for name in shown:
+            self.fileListInfo.addItem(QListWidgetItem(name))
+
+        extra = "" if len(files) <= max_show else f"（仅显示前 {max_show} 个）"
+        if hasattr(self, "lblFileCount"):
+            self.lblFileCount.setText(f"文件数：{len(files)}{extra}")
+
+        # 高亮当前文件
+        try:
+            cur = os.path.basename(self.current_image_path or "")
+            if cur:
+                for i, name in enumerate(shown):
+                    if name == cur:
+                        self.fileListInfo.setCurrentRow(i)
+                        break
+        except Exception:
+            pass
+
 
     def initUI(self):
         layout = QHBoxLayout(self)
@@ -623,6 +719,26 @@ class LabelInterface(QWidget):
         self.lblFile.setWordWrap(True)
         self.lblFile.setStyleSheet("color:#374151;")
         fileLayout.addWidget(self.lblFile)
+        # 显示当前文件夹及其内文件（右下角文件信息）
+        self.lblFolder = QLabel("文件夹：未选择")
+        self.lblFolder.setWordWrap(True)
+        self.lblFolder.setStyleSheet("color:#6B7280; font-size: 12px;")
+        fileLayout.addWidget(self.lblFolder)
+
+        self.lblFileCount = QLabel("")
+        self.lblFileCount.setStyleSheet("color:#6B7280; font-size: 12px;")
+        fileLayout.addWidget(self.lblFileCount)
+
+        self.fileListInfo = QListWidget()
+        self.fileListInfo.setStyleSheet("""
+            QListWidget{ border:1px solid #E5E7EB; border-radius:10px; }
+            QListWidget::item{ padding:6px; }
+            QListWidget::item:selected{ background:#E6F0FF; color:#111827; }
+        """)
+        self.fileListInfo.setMaximumHeight(220)
+        self.fileListInfo.setSelectionMode(QListWidget.SingleSelection)
+        fileLayout.addWidget(self.fileListInfo)
+
 
         self.btnSaveBig = QPushButton("💾 保存当前结果")
         self.btnSaveBig.setCursor(Qt.PointingHandCursor)
@@ -962,6 +1078,12 @@ class LabelInterface(QWidget):
     def load_image(self, image_path: str):
         self.current_image_path = image_path
         self.lblFile.setText(image_path or "未选择")
+
+        # 更新右下角文件夹内容列表
+        try:
+            self.update_file_info_list(os.path.dirname(image_path) if image_path else "")
+        except Exception:
+            pass
 
         # 清空 scene（会在 C++ 层销毁所有 items）
         self.scene.clear()

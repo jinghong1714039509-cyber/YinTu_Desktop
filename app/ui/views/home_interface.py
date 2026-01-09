@@ -1,10 +1,12 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QPushButton, QFileDialog, QFrame, QGridLayout, 
                                QDialog, QLineEdit, QFormLayout, QDialogButtonBox,
+                               QListWidget, QListWidgetItem,
                                QGraphicsDropShadowEffect)
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from app.services.data_manager import DataManager
+import os
 
 # === 现代风格的新建项目对话框 ===
 # ... (前面的导入保持不变)
@@ -174,6 +176,7 @@ class HomeInterface(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.current_folder = ""  # 当前选择的数据文件夹
         self.initUI()
 
     def initUI(self):
@@ -202,6 +205,40 @@ class HomeInterface(QWidget):
         self.refresh_stats()
         main_layout.addStretch(1)
 
+        # 右下角：文件信息（显示所选文件夹内的文件）
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(20)
+        bottom_row.addStretch(1)
+
+        self.fileInfoFrame = QFrame()
+        self.fileInfoFrame.setStyleSheet("QFrame { background-color: white; border-radius: 6px; border: 1px solid #dee2e6; }")
+        self.fileInfoFrame.setFixedWidth(420)
+
+        fi_layout = QVBoxLayout(self.fileInfoFrame)
+        fi_layout.setContentsMargins(12, 12, 12, 12)
+        fi_layout.setSpacing(8)
+
+        lbl_fi_title = QLabel("文件信息")
+        lbl_fi_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #444;")
+        fi_layout.addWidget(lbl_fi_title)
+
+        self.lblFolder = QLabel("未选择文件夹")
+        self.lblFolder.setWordWrap(True)
+        self.lblFolder.setStyleSheet("color: #666; font-size: 12px;")
+        fi_layout.addWidget(self.lblFolder)
+
+        self.fileListWidget = QListWidget()
+        self.fileListWidget.setMinimumHeight(160)
+        self.fileListWidget.setStyleSheet("QListWidget { background: #FFFFFF; border: 1px solid #e5e7eb; border-radius: 4px; }")
+        fi_layout.addWidget(self.fileListWidget, 1)
+
+        self.lblFileCount = QLabel("")
+        self.lblFileCount.setStyleSheet("color: #888; font-size: 12px;")
+        fi_layout.addWidget(self.lblFileCount)
+
+        bottom_row.addWidget(self.fileInfoFrame)
+        main_layout.addLayout(bottom_row)
+
     def refresh_stats(self):
         for i in reversed(range(self.stats_layout.count())): 
             self.stats_layout.itemAt(i).widget().setParent(None)
@@ -222,8 +259,43 @@ class HomeInterface(QWidget):
         if dialog.exec():
             data = dialog.get_data()
             if data['folder']:
+                self.update_file_info(data['folder'])
                 self.project_selected.emit(data) # 发送完整配置
     
+
+    def update_file_info(self, folder_path: str):
+        """刷新右下角文件信息面板：列出 folder_path 目录下的文件（不递归）。"""
+        folder_path = folder_path or ""
+        self.current_folder = folder_path
+        if hasattr(self, 'lblFolder'):
+            self.lblFolder.setText(folder_path if folder_path else "未选择文件夹")
+        if not hasattr(self, 'fileListWidget'):
+            return
+        self.fileListWidget.clear()
+
+        if not folder_path or not os.path.isdir(folder_path):
+            if hasattr(self, 'lblFileCount'):
+                self.lblFileCount.setText("")
+            return
+
+        try:
+            names = [n for n in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, n))]
+        except Exception:
+            names = []
+
+        names.sort(key=lambda s: s.lower())
+        limit = 200
+        show_names = names[:limit]
+        for n in show_names:
+            self.fileListWidget.addItem(QListWidgetItem(n))
+
+        if hasattr(self, 'lblFileCount'):
+            if len(names) > limit:
+                self.lblFileCount.setText(f"共 {len(names)} 个文件（仅显示前 {limit} 个）")
+            else:
+                self.lblFileCount.setText(f"共 {len(names)} 个文件")
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh_stats()
+        if self.current_folder:
+            self.update_file_info(self.current_folder)
