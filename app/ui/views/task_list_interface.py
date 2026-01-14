@@ -1,3 +1,4 @@
+import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QPushButton, QScrollArea, QFrame, QProgressBar, QMessageBox,
                                QGraphicsDropShadowEffect)
@@ -13,6 +14,7 @@ from app.ui.views.home_interface import NewProjectDialog
 class TaskCard(QFrame):
     enter_clicked = Signal(object)  # 信号：进入项目
     export_clicked = Signal(object) # 信号：导出
+    delete_clicked = Signal(object) # 信号：删除
 
     def __init__(self, project_data, parent=None):
         super().__init__(parent)
@@ -26,33 +28,33 @@ class TaskCard(QFrame):
             TaskCard {
                 background-color: #ffffff;
                 border-radius: 16px;
-                border: 1px solid #eef1f6;
-            }
-            TaskCard:hover {
-                border: 1px solid #007bff; /* 悬停时边框变蓝 */
+                border: 1px solid #ebeef5;
             }
         """)
         
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
+        shadow.setBlurRadius(16)
         shadow.setXOffset(0)
-        shadow.setYOffset(8)
-        shadow.setColor(QColor(0, 0, 0, 15))
+        shadow.setYOffset(4)
+        shadow.setColor(QColor(0, 0, 0, 20))
         self.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(25, 30, 25, 25)
-        layout.setSpacing(15)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
 
-        # 1. 图标
-        icon_lbl = QLabel("📁")
-        icon_lbl.setStyleSheet("font-size: 32px; border: none; background: transparent;")
-        icon_lbl.setAlignment(Qt.AlignLeft)
+        # 1. 顶部图标
+        icon_lbl = QLabel()
+        icon_lbl.setFixedHeight(70)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_path = os.path.join("app/assets/icons", "folder.svg")
+        icon_lbl.setText("📁")
+        icon_lbl.setStyleSheet("font-size: 38px; border: none; background: transparent;")
         layout.addWidget(icon_lbl)
 
-        # 2. 任务名称
+        # 2. 标题
         name_lbl = QLabel(self.data['name'])
-        name_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #2c3e50; border: none; background: transparent;")
+        name_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #303133; border: none; background: transparent;")
         name_lbl.setWordWrap(True)
         layout.addWidget(name_lbl)
         
@@ -83,7 +85,7 @@ class TaskCard(QFrame):
         # 4. 底部按钮行
         btn_layout = QHBoxLayout()
         status_lbl = QLabel(self.data['status'])
-        status_lbl.setStyleSheet(f"color: {self.data['status_color']}; font-weight: bold; font-size: 13px; border: none; background: transparent;")
+        status_lbl.setStyleSheet(f"color: {self.data['status_color']}; font-weight: 600; font-size: 13px; border: none; background: transparent;")
         btn_layout.addWidget(status_lbl)
         btn_layout.addStretch(1)
 
@@ -103,13 +105,35 @@ class TaskCard(QFrame):
         """)
         btn_export.clicked.connect(self.on_export_btn_clicked) # 防止冒泡
         btn_layout.addWidget(btn_export)
+
+        btn_delete = QPushButton("删除")
+        btn_delete.setFixedSize(60, 28)
+        btn_delete.setCursor(Qt.PointingHandCursor)
+        btn_delete.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #dc3545;
+                border-radius: 14px;
+                color: #dc3545;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover { background-color: #ffecec; }
+        """)
+        btn_delete.clicked.connect(self.on_delete_btn_clicked) # 防止冒泡
+        btn_layout.addWidget(btn_delete)
+
         layout.addLayout(btn_layout)
 
     def on_export_btn_clicked(self):
         """点击导出按钮时，只触发导出，不触发进入项目"""
         self.export_clicked.emit(self.data['object'])
 
-    # === 关键修复：点击卡片任意位置（除了导出按钮）进入项目 ===
+    def on_delete_btn_clicked(self):
+        """点击删除按钮时，只触发删除，不触发进入项目"""
+        self.delete_clicked.emit(self.data['object'])
+
+    # === 点击卡片任意位置进入项目（按钮点击不会触发这里） ===
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             # 简单的点击反馈动画
@@ -136,64 +160,45 @@ class TaskListInterface(QWidget):
 
     def initUI(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        header_bar = QFrame()
-        header_bar.setFixedHeight(70)
-        header_bar.setStyleSheet("background-color: transparent; border-bottom: 1px solid #eef1f6;")
-        header_layout = QHBoxLayout(header_bar)
-        header_layout.setContentsMargins(40, 0, 40, 0)
-        title = QLabel("我的任务")
-        title.setStyleSheet("font-size: 24px; font-weight: 800; color: #2c3e50;")
-        header_layout.addWidget(title)
-        header_layout.addStretch()
-        main_layout.addWidget(header_bar)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #f4f7f9; }") 
-        
-        self.scroll_content = QWidget()
-        self.scroll_content.setStyleSheet("background-color: #f4f7f9;") 
-        
-        self.flow_layout = FlowLayout(self.scroll_content, margin=40, spacing=30)
-        
-        scroll.setWidget(self.scroll_content)
-        main_layout.addWidget(scroll)
+        # 顶部标题栏
+        top_bar = QHBoxLayout()
+        title = QLabel("任务列表")
+        title.setStyleSheet("font-size: 20px; font-weight: 800; color: #303133;")
+        top_bar.addWidget(title)
+        top_bar.addStretch(1)
 
-        # 悬浮按钮
-        self.fab_btn = QPushButton(self)
-        self.fab_btn.setText("+") 
-        self.fab_btn.setFixedSize(56, 56)
-        self.fab_btn.setCursor(Qt.PointingHandCursor)
-        self.fab_btn.setStyleSheet("""
+        btn_new = QPushButton("新建任务")
+        btn_new.setFixedSize(100, 34)
+        btn_new.setCursor(Qt.PointingHandCursor)
+        btn_new.setStyleSheet("""
             QPushButton {
-                background-color: #007bff; 
-                color: white;
-                font-size: 36px;
-                font-weight: 300;
-                border-radius: 28px;
+                background-color: #007bff;
+                color: #fff;
                 border: none;
-                padding-bottom: 4px; 
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 600;
             }
             QPushButton:hover { background-color: #0069d9; }
-            QPushButton:pressed { background-color: #0056b3; }
         """)
-        
-        fab_shadow = QGraphicsDropShadowEffect(self.fab_btn)
-        fab_shadow.setBlurRadius(15)
-        fab_shadow.setColor(QColor(0,0,0,100))
-        fab_shadow.setYOffset(6)
-        self.fab_btn.setGraphicsEffect(fab_shadow)
-        
-        self.fab_btn.clicked.connect(self.open_new_task_dialog)
-        self.fab_btn.raise_() 
+        btn_new.clicked.connect(self.open_new_task_dialog)
+        top_bar.addWidget(btn_new)
+        main_layout.addLayout(top_bar)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        fab_x = self.width() - self.fab_btn.width() - 40
-        fab_y = self.height() - self.fab_btn.height() - 40
-        self.fab_btn.move(fab_x, fab_y)
+        # 滚动区 + 流式布局
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        container = QWidget()
+        self.flow_layout = FlowLayout(container, margin=0, spacing=18)
+        container.setLayout(self.flow_layout)
+
+        scroll.setWidget(container)
+        main_layout.addWidget(scroll)
 
     def refresh_data(self):
         while self.flow_layout.count():
@@ -209,6 +214,7 @@ class TaskListInterface(QWidget):
             # 连接信号
             card.enter_clicked.connect(self.on_project_clicked)
             card.export_clicked.connect(self.on_export_clicked)
+            card.delete_clicked.connect(self.on_delete_clicked)
             self.flow_layout.addWidget(card)
 
     def open_new_task_dialog(self):
@@ -237,3 +243,50 @@ class TaskListInterface(QWidget):
                 
             except Exception as e:
                 QMessageBox.critical(self, "错误", str(e))
+
+    def on_delete_clicked(self, project_obj):
+        # 删除前预览（统计将删除的数据量）
+        try:
+            preview = DataManager.preview_delete_project(project_obj)
+            msg_text = (
+                f"确认删除任务：{getattr(project_obj, 'name', '未命名')}\n\n"
+                f"- 将删除图片索引：{preview.get('media_count', 0)} 条\n"
+                f"- 将删除标注记录：{preview.get('annotation_count', 0)} 条\n\n"
+                f"注意：默认不会删除你原始目录中的图片/视频文件。"
+            )
+        except Exception:
+            msg_text = (
+                f"确认删除任务：{getattr(project_obj, 'name', '未命名')}\n\n"
+                "注意：默认不会删除你原始目录中的图片/视频文件。"
+            )
+
+        confirm = QMessageBox(self)
+        confirm.setWindowTitle("确认删除")
+        confirm.setText(msg_text)
+        confirm.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        confirm.setDefaultButton(QMessageBox.No)
+        confirm.setStyleSheet("QMessageBox { background-color: white; color: #333; } QLabel { color: #333; }")
+        ret = confirm.exec()
+
+        if ret != QMessageBox.Yes:
+            return
+
+        result = DataManager.delete_project(project_obj, delete_managed_files=False, delete_original_files=False)
+        if not result.get("ok"):
+            QMessageBox.critical(self, "删除失败", result.get("error") or "未知错误")
+            return
+
+        # 刷新任务列表
+        self.refresh_data()
+
+        done = QMessageBox(self)
+        done.setWindowTitle("删除成功")
+        deleted = result.get("deleted", {})
+        done.setText(
+            f"删除完成。\n"
+            f"- Projects: {deleted.get('projects', 0)}\n"
+            f"- MediaItems: {deleted.get('media', 0)}\n"
+            f"- Annotations: {deleted.get('annotations', 0)}"
+        )
+        done.setStyleSheet("QMessageBox { background-color: white; color: #333; } QLabel { color: #333; }")
+        done.exec()
