@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QCursor
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QToolTip
 
 
 def get_icon_path(icon_name: str) -> Optional[str]:
@@ -38,37 +38,37 @@ def render_icon_with_bg(
     radius: int = 10,
     padding: int = 4,
 ) -> QPixmap:
-    """Render icon (SVG/bitmap) -> tint -> draw on an opaque rounded background plate."""
-    glyph_size = max(1, size - 2 * padding)
+    """
+    Render svg icon to pixmap with a solid background tile to avoid transparency issues.
+    """
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
 
-    glyph = QPixmap(glyph_size, glyph_size)
-    glyph.fill(Qt.transparent)
+    if not icon_path:
+        return pm
 
-    if (icon_path or "").lower().endswith(".svg"):
-        renderer = QSvgRenderer(icon_path)
-        p = QPainter(glyph)
-        renderer.render(p)
-        p.end()
-    else:
-        pm = QPixmap(icon_path)
-        if not pm.isNull():
-            pm = pm.scaled(glyph_size, glyph_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            p = QPainter(glyph)
-            x = (glyph_size - pm.width()) // 2
-            y = (glyph_size - pm.height()) // 2
-            p.drawPixmap(x, y, pm)
-            p.end()
+    # render svg to pixmap
+    renderer = QSvgRenderer(icon_path)
+    icon_pm = QPixmap(size - padding * 2, size - padding * 2)
+    icon_pm.fill(Qt.transparent)
 
-    if glyph.isNull():
-        return QPixmap()
-
-    tinted = QPixmap(glyph.size())
-    tinted.fill(fg)
-    p = QPainter(tinted)
-    p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-    p.drawPixmap(0, 0, glyph)
+    p = QPainter(icon_pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    renderer.render(p)
     p.end()
 
+    # tint svg-rendered pixmap
+    tinted = QPixmap(icon_pm.size())
+    tinted.fill(Qt.transparent)
+
+    p = QPainter(tinted)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.drawPixmap(0, 0, icon_pm)
+    p.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    p.fillRect(tinted.rect(), fg)
+    p.end()
+
+    # compose bg + tinted icon
     out = QPixmap(size, size)
     out.fill(Qt.transparent)
 
@@ -98,12 +98,11 @@ class SidebarItem(QPushButton):
         self.setStyleSheet(
             """
             QPushButton { background-color: transparent; border-radius: 12px; border: none; }
-            QPushButton:hover { background-color: #F3F4F6; }
-            QPushButton:checked { background-color: #E6F0FF; }
+            QPushButton:hover { background-color: rgba(59,130,246,0.12); }
+            QPushButton:checked { background-color: rgba(59,130,246,0.18); }
             """
         )
 
-        self.toggled.connect(self.update_icon)
         self.update_icon()
 
     def update_icon(self):
@@ -152,6 +151,10 @@ class Sidebar(QFrame):
         self.current_btn = None
         self.initUI()
 
+    def show_todo_tip(self, message: str = "功能待补充"):
+        """Show a tooltip near cursor for unimplemented navigation items."""
+        QToolTip.showText(QCursor.pos(), message, self)
+
     def initUI(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 20, 0, 20)
@@ -163,35 +166,43 @@ class Sidebar(QFrame):
         logo.setAlignment(Qt.AlignCenter)
         logo.setStyleSheet(
             "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #2563EB); "
-            "color: white; font-weight: 900; font-size: 20px; border-radius: 10px;"
+            "color: white; font-weight: 700; border-radius: 10px;"
         )
         layout.addWidget(logo)
-        layout.addSpacing(20)
 
+        layout.addSpacing(8)
+
+        # 第一个按钮：真实可用
         self.btn_tasks = SidebarItem("folder.svg", "任务列表")
         self.btn_tasks.clicked.connect(lambda: self.on_nav_click("tasks", self.btn_tasks))
         layout.addWidget(self.btn_tasks)
 
-        self.btn_label = SidebarItem("edit.svg", "标注工作台")
-        self.btn_label.clicked.connect(lambda: self.on_nav_click("label", self.btn_label))
+        # 其它按钮：暂未实现 -> 悬停/点击提示“功能待补充”
+        self.btn_label = SidebarItem("edit.svg", "功能待补充")
+        self.btn_label.setCheckable(False)
+        self.btn_label.clicked.connect(lambda: self.show_todo_tip())
         layout.addWidget(self.btn_label)
 
-        self.btn_ai = SidebarItem("brain.svg", "AI 模型")
-        self.btn_ai.clicked.connect(lambda: self.on_nav_click("ai", self.btn_ai))
+        self.btn_ai = SidebarItem("brain.svg", "功能待补充")
+        self.btn_ai.setCheckable(False)
+        self.btn_ai.clicked.connect(lambda: self.show_todo_tip())
         layout.addWidget(self.btn_ai)
 
-        self.btn_stats = SidebarItem("chart.svg", "统计报表")
-        self.btn_stats.clicked.connect(lambda: self.on_nav_click("stats", self.btn_stats))
+        self.btn_stats = SidebarItem("chart.svg", "功能待补充")
+        self.btn_stats.setCheckable(False)
+        self.btn_stats.clicked.connect(lambda: self.show_todo_tip())
         layout.addWidget(self.btn_stats)
 
         layout.addStretch(1)
 
-        self.btn_settings = SidebarItem("setting.svg", "设置")
-        self.btn_settings.clicked.connect(lambda: self.on_nav_click("settings", self.btn_settings))
+        self.btn_settings = SidebarItem("setting.svg", "功能待补充")
+        self.btn_settings.setCheckable(False)
+        self.btn_settings.clicked.connect(lambda: self.show_todo_tip())
         layout.addWidget(self.btn_settings)
 
-        self.btn_user = SidebarItem("user.svg", "用户")
-        self.btn_user.clicked.connect(lambda: self.on_nav_click("user", self.btn_user))
+        self.btn_user = SidebarItem("user.svg", "功能待补充")
+        self.btn_user.setCheckable(False)
+        self.btn_user.clicked.connect(lambda: self.show_todo_tip())
         layout.addWidget(self.btn_user)
 
         self.btn_tasks.setChecked(True)

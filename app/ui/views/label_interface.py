@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import math
+import hashlib
 
 # === 修复核心 1: 补全 QGraphicsLineItem，彻底解决多边形画线崩溃问题 ===
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                                QGraphicsPathItem, QGraphicsItem, QFrame, QMessageBox,
                                QListWidget, QListWidgetItem, QGraphicsLineItem, QGraphicsEllipseItem,
                                QSplitter, QButtonGroup, QGraphicsTextItem, QDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStyle, QScrollArea, QGraphicsDropShadowEffect, QApplication)
+                               QStyle, QScrollArea, QGraphicsDropShadowEffect, QApplication, QFileDialog)
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QSize
 from PySide6.QtGui import QPixmap, QPainter, QWheelEvent, QPen, QColor, QBrush, QPolygonF, QPainterPath, QFont, QAction, QKeySequence, QIcon, QShortcut
 from PySide6.QtGui import QCursor
@@ -473,26 +474,101 @@ class ImageViewer(QGraphicsView):
         return dist < self.snap_threshold / self.transform().m11()
 
 
+# =====================
+# 按类别着色：不同 label 使用不同颜色
+# - 同一 label 始终同色（稳定）
+# - 若项目已定义 classes，则按 classes 顺序分配颜色
+# - 否则使用 label 哈希映射到调色板，保证跨会话一致
+# =====================
+_LABEL_COLOR_PALETTE = [
+    "#3B82F6",  # blue
+    "#EF4444",  # red
+    "#10B981",  # green
+    "#F59E0B",  # amber
+    "#8B5CF6",  # purple
+    "#06B6D4",  # cyan
+    "#EC4899",  # pink
+    "#22C55E",  # green2
+    "#A855F7",  # violet
+    "#0EA5E9",  # sky
+    "#F97316",  # orange
+    "#14B8A6",  # teal
+    "#E11D48",  # rose
+    "#84CC16",  # lime
+    "#6366F1",  # indigo
+    "#D946EF",  # fuchsia
+    "#64748B",  # slate
+    "#9333EA",  # purple2
+    "#FB7185",  # pink2
+    "#2DD4BF",  # teal2
+]
+
+
+def color_for_label(label: str, classes=None) -> QColor:
+    """Get a stable QColor for a label.
+
+    Args:
+        label: annotation class name
+        classes: optional list of project classes; if provided and contains label,
+                 the color is based on the class index (stable within project).
+    """
+    if not label:
+        return QColor(_LABEL_COLOR_PALETTE[0])
+
+    idx = None
+    try:
+        if classes and label in classes:
+            idx = int(classes.index(label))
+    except Exception:
+        idx = None
+
+    if idx is None:
+        h = hashlib.md5(label.encode("utf-8")).hexdigest()
+        idx = int(h[:8], 16)
+
+    return QColor(_LABEL_COLOR_PALETTE[idx % len(_LABEL_COLOR_PALETTE)])
+
+
 class RectShape(QGraphicsRectItem):
-    def __init__(self, rect, label):
+    def __init__(self, rect, label, color: QColor = None):
         super().__init__(rect)
         self.label = label
-        self.setPen(QPen(QColor("#3B82F6"), 2))
-        self.setBrush(QBrush(QColor(59, 130, 246, 40)))
+        if color is None:
+            color = color_for_label(label)
+        self._color = QColor(color)
+        self.setPen(QPen(self._color, 2))
+        self.setBrush(QBrush(QColor(self._color.red(), self._color.green(), self._color.blue(), 40)))
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+
+    def set_color(self, color: QColor):
+        """Update pen/brush color for this shape."""
+        self._color = QColor(color)
+        self.setPen(QPen(self._color, 2))
+        self.setBrush(QBrush(QColor(self._color.red(), self._color.green(), self._color.blue(), 40)))
 
 
 class PolyShape(QGraphicsPolygonItem):
-    def __init__(self, points, label):
+    def __init__(self, points, label, color: QColor = None):
         super().__init__(QPolygonF(points))
         self.label = label
-        self.setPen(QPen(QColor("#FF4D4D"), 2))
-        self.setBrush(QBrush(QColor(255, 77, 77, 40)))
+        if color is None:
+            color = color_for_label(label)
+        self._color = QColor(color)
+        self.setPen(QPen(self._color, 2))
+        self.setBrush(QBrush(QColor(self._color.red(), self._color.green(), self._color.blue(), 40)))
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+
+    def set_color(self, color: QColor):
+        """Update pen/brush color for this shape."""
+        self._color = QColor(color)
+        self.setPen(QPen(self._color, 2))
+        self.setBrush(QBrush(QColor(self._color.red(), self._color.green(), self._color.blue(), 40)))
 
 
 class LabelInterface(QWidget):
     request_ai_signal = Signal(str)
+    # 当用户在标注页中切换/新增 AI 模型时，通知 MainWindow 立即更新 ai_worker 配置
+    ai_model_changed_signal = Signal(str)
     back_clicked = Signal()
 
     def __init__(self, parent=None):
@@ -535,6 +611,10 @@ class LabelInterface(QWidget):
         else:
             self.project_classes = []
         self.refresh_task_classes_ui()
+
+    def get_label_color(self, label: str) -> QColor:
+        """Return stable color for a given label within current project."""
+        return color_for_label(label, self.project_classes)
 
     def load_file_list(self, all_files, target_path):
         self.all_files = all_files or []
@@ -643,16 +723,20 @@ class LabelInterface(QWidget):
         tb_layout.addWidget(line2)
         tb_layout.addSpacing(4)
 
+        # AI 模型配置（新增/切换）
+        self.btnAIModel = self.create_tool_btn("ai2.svg", "设置/切换 AI 模型", None)
         self.btnAI = self.create_tool_btn("ai.svg", "AI 标注", None)
         self.btnSave = self.create_tool_btn("save.svg", "保存 (Ctrl+S)", None)
         self.btnExport = self.create_tool_btn("export.svg", "导出", None)
         self.btnHelp = self.create_tool_btn("help.svg", "快捷键说明", None)
 
+        self.btnAIModel.clicked.connect(self.choose_ai_model)
         self.btnAI.clicked.connect(self.request_ai)
         self.btnSave.clicked.connect(lambda: self.save_current_work(silent=False))
         self.btnExport.clicked.connect(self.export_dataset)
         self.btnHelp.clicked.connect(self.show_shortcuts)
 
+        tb_layout.addWidget(self.btnAIModel)
         tb_layout.addWidget(self.btnAI)
         tb_layout.addWidget(self.btnSave)
         tb_layout.addWidget(self.btnExport)
@@ -912,7 +996,7 @@ class LabelInterface(QWidget):
 
             if shape_type == "rect":
                 rect: QRectF = data
-                item = RectShape(rect, label)
+                item = RectShape(rect, label, self.get_label_color(label))
                 self.scene.addItem(item)
                 self.annotations.append(item)
                 self.view._apply_annotation_interaction()
@@ -920,7 +1004,7 @@ class LabelInterface(QWidget):
 
             elif shape_type == "poly":
                 points = data
-                item = PolyShape(points, label)
+                item = PolyShape(points, label, self.get_label_color(label))
                 self.scene.addItem(item)
                 self.annotations.append(item)
                 self.view._apply_annotation_interaction()
@@ -1144,7 +1228,7 @@ class LabelInterface(QWidget):
                 try:
                     pts = json.loads(ann.points)
                     qpoints = [QPointF(p[0] * img_w, p[1] * img_h) for p in pts]
-                    item = PolyShape(qpoints, ann.label)
+                    item = PolyShape(qpoints, ann.label, self.get_label_color(ann.label))
                     self.scene.addItem(item)
                     self.annotations.append(item)
                 except Exception:
@@ -1157,11 +1241,27 @@ class LabelInterface(QWidget):
                     x = (ann.x * img_w) - (w / 2)
                     y = (ann.y * img_h) - (h / 2)
                     rect = QRectF(x, y, w, h)
-                    item = RectShape(rect, ann.label)
+                    item = RectShape(rect, ann.label, self.get_label_color(ann.label))
                     self.scene.addItem(item)
                     self.annotations.append(item)
                 except Exception:
                     pass
+
+        # 若 DB 中出现了新的 label，而 Project.classes 为空或缺失，则自动补齐到『任务历史标签』
+        try:
+            changed = False
+            for it in self.annotations:
+                lbl = getattr(it, "label", None)
+                if lbl and lbl not in self.project_classes:
+                    self.project_classes.append(lbl)
+                    changed = True
+            if changed:
+                if self.current_project:
+                    self.current_project.classes = ",".join(self.project_classes)
+                    self.current_project.save()
+                self.refresh_task_classes_ui()
+        except Exception:
+            pass
 
     def save_current_work(self, silent=True):
         if not self.current_image_path:
@@ -1176,6 +1276,7 @@ class LabelInterface(QWidget):
                 QMessageBox.warning(self, "保存失败", "画布尺寸异常，无法保存。")
             return
 
+        # 统一保存结构：写入 x/y/w/h（归一化中心点+宽高）用于数据库字段，同时保留 rect 兼容旧逻辑
         box_data = []
         for it in self.annotations:
             if isinstance(it, RectShape):
@@ -1184,7 +1285,12 @@ class LabelInterface(QWidget):
                 y = (r.center().y()) / img_h
                 w = r.width() / img_w
                 h = r.height() / img_h
-                box_data.append({"shape_type": "rect", "label": it.label, "rect": [x, y, w, h]})
+                box_data.append({
+                    "shape_type": "rect",
+                    "label": it.label,
+                    "x": x, "y": y, "w": w, "h": h,
+                    "rect": [x, y, w, h]
+                })
 
             elif isinstance(it, PolyShape):
                 poly = it.polygon()
@@ -1197,6 +1303,7 @@ class LabelInterface(QWidget):
                 box_data.append({
                     "shape_type": "poly",
                     "label": it.label,
+                    "x": cx, "y": cy, "w": w, "h": h,
                     "rect": [cx, cy, w, h],
                     "points": json.dumps(pts)
                 })
@@ -1213,15 +1320,88 @@ class LabelInterface(QWidget):
             if not silent:
                 QMessageBox.warning(self, "保存失败", "保存失败，请检查数据库/路径。")
 
+    def choose_ai_model(self):
+        """新增/切换 AI 模型：选择模型文件 -> 写入 Project -> 通知 MainWindow 更新 ai_worker。"""
+        if not self.current_project:
+            QMessageBox.information(self, "提示", "请先进入某个任务的标注界面后再设置 AI 模型。")
+            return
+
+        # 默认打开上次模型所在目录；否则打开当前工作目录
+        start_dir = os.getcwd()
+        try:
+            mp = getattr(self.current_project, "model_path", None)
+            if mp and isinstance(mp, str) and os.path.exists(os.path.dirname(mp)):
+                start_dir = os.path.dirname(mp)
+        except Exception:
+            pass
+
+        filt = "Model Files (*.pt *.onnx *.engine *.xml *.tflite *.pb *.pth *.pkl);;All Files (*)"
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择 AI 模型文件", start_dir, filt)
+        if not file_path:
+            return
+
+        file_path = os.path.abspath(file_path)
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "失败", "选择的模型文件不存在，请重新选择。")
+            return
+
+        # 写入 Project（peewee Model）并持久化
+        try:
+            self.current_project.model_path = file_path
+            self.current_project.save()
+        except Exception:
+            # 即便写库失败，也尽量让当前会话可用
+            pass
+
+        # 立即通知主窗口更新 ai_worker 配置
+        try:
+            self.ai_model_changed_signal.emit(file_path)
+        except Exception:
+            pass
+
+        QMessageBox.information(self, "成功", f"AI 模型已设置为：\n{file_path}")
+
     def request_ai(self):
         if not self.current_image_path:
             QMessageBox.information(self, "提示", "请先选择图像。")
             return
+
+        # 若任务未设置模型，优先提示用户设置（避免默认模型缺失时反复报错）
+        model_path = None
+        try:
+            model_path = getattr(self.current_project, "model_path", None)
+        except Exception:
+            model_path = None
+
+        if not model_path:
+            QMessageBox.information(self, "提示", "当前任务未设置 AI 模型，请先点击左侧『设置/切换 AI 模型』按钮选择模型文件。")
+            return
+
+        if model_path and (not os.path.exists(model_path)):
+            QMessageBox.warning(self, "提示", "当前任务的 AI 模型文件不存在或路径无效，请重新选择模型文件。")
+            return
+
         self.request_ai_signal.emit(self.current_image_path)
 
     def apply_ai_results(self, results):
         if not results:
             return
+
+        # AI 结果可能包含新的类别：同步进 Project.classes，并刷新右侧『任务历史标签』
+        try:
+            changed = False
+            for ann in results:
+                lbl = ann.get("label") or "Object"
+                if lbl not in self.project_classes:
+                    self.project_classes.append(lbl)
+                    changed = True
+            if changed:
+                if self.current_project:
+                    self.current_project.classes = ",".join(self.project_classes)
+                    self.current_project.save()
+                self.refresh_task_classes_ui()
+        except Exception:
+            pass
 
         # 先清空现有标注（保留底图）
         for it in list(self.annotations):
@@ -1241,7 +1421,8 @@ class LabelInterface(QWidget):
                 if ann.get("shape_type") == "poly" and ann.get("points"):
                     pts = json.loads(ann["points"])
                     qpoints = [QPointF(p[0] * img_w, p[1] * img_h) for p in pts]
-                    item = PolyShape(qpoints, ann.get("label", "Object"))
+                    lbl = ann.get("label", "Object")
+                    item = PolyShape(qpoints, lbl, self.get_label_color(lbl))
                     self.scene.addItem(item)
                     self.annotations.append(item)
                 else:
@@ -1251,7 +1432,8 @@ class LabelInterface(QWidget):
                     hpx = h * img_h
                     x = cx * img_w - wpx / 2
                     y = cy * img_h - hpx / 2
-                    item = RectShape(QRectF(x, y, wpx, hpx), ann.get("label", "Object"))
+                    lbl = ann.get("label", "Object")
+                    item = RectShape(QRectF(x, y, wpx, hpx), lbl, self.get_label_color(lbl))
                     self.scene.addItem(item)
                     self.annotations.append(item)
         except Exception:

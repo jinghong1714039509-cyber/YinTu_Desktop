@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         self.task_list_interface.new_project_signal.connect(self.start_import)
         self.task_list_interface.project_selected.connect(self.enter_labeling_mode)
         self.label_interface.request_ai_signal.connect(self.run_ai)
+        # 标注页切换/新增 AI 模型后，立刻刷新 ai_worker 配置
+        self.label_interface.ai_model_changed_signal.connect(self.on_ai_model_changed)
         self.label_interface.back_clicked.connect(self.return_to_tasks)
         
         self.worker = None      
@@ -233,6 +235,16 @@ class MainWindow(QMainWindow):
     def run_ai(self, image_path):
         if not self.ai_worker.isRunning():
             self.ai_worker.set_image(image_path); self.ai_worker.start()
+
+    def on_ai_model_changed(self, model_path: str):
+        """用户在标注页选择/切换 AI 模型后，立即更新推理线程配置。"""
+        try:
+            classes_str = self.current_project.classes if self.current_project else None
+        except Exception:
+            classes_str = None
+
+        # 立刻更新 worker；如果模型路径无效，实际加载时会在 on_ai_error 里提示
+        self.ai_worker.update_config(model_path, classes_str)
     
     def on_ai_finished(self, image_path, results):
         self.label_interface.apply_ai_results(results)

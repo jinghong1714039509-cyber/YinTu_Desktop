@@ -243,13 +243,37 @@ class DataManager:
         # 写入新标注
         with db.atomic():
             for ann in box_data:
+                # 兼容两种输入结构：
+                # - 新结构：直接提供 x/y/w/h（归一化中心点+宽高）
+                # - 旧结构：仅提供 rect=[x,y,w,h]
+                x = ann.get('x', None)
+                y = ann.get('y', None)
+                w = ann.get('w', None)
+                h = ann.get('h', None)
+
+                if x is None or y is None or w is None or h is None:
+                    rect = ann.get('rect', None)
+                    if isinstance(rect, (list, tuple)) and len(rect) == 4:
+                        x = rect[0] if x is None else x
+                        y = rect[1] if y is None else y
+                        w = rect[2] if w is None else w
+                        h = rect[3] if h is None else h
+
+                try:
+                    x = float(x) if x is not None else 0.0
+                    y = float(y) if y is not None else 0.0
+                    w = float(w) if w is not None else 0.0
+                    h = float(h) if h is not None else 0.0
+                except Exception:
+                    x, y, w, h = 0.0, 0.0, 0.0, 0.0
+
                 Annotation.create(
                     media_item=media_item,
                     label=ann['label'],
-                    x=ann.get('x', 0),
-                    y=ann.get('y', 0),
-                    w=ann.get('w', 0),
-                    h=ann.get('h', 0),
+                    x=x,
+                    y=y,
+                    w=w,
+                    h=h,
                     shape_type=ann.get('shape_type', 'rect'),
                     points=ann.get('points', None),
                     confidence=ann.get('confidence', 1.0)
